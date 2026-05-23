@@ -1,4 +1,3 @@
-
 PoupaMed - Engine Inteligente de Comparação Hospitalar
 O PoupaMed é uma solução de automação focada em compras hospitalares, projetada para processar, auditar e comparar propostas comerciais de fornecedores. Ele transforma cotações complexas (PDFs e planilhas) em um ranking financeiro preciso, eliminando o trabalho manual e erros de digitação.
 
@@ -52,6 +51,3 @@ Ranking: O sistema apresentará o fornecedor com melhor custo-benefício, respei
 
 🔒 Segurança e Privacidade
 O sistema opera em modo de processamento volátil. Os arquivos enviados são lidos na memória RAM e descartados imediatamente após o fechamento da sessão do usuário. Não realizamos persistência de dados sensíveis de pacientes ou propostas comerciais.
-
-Dica para o Cliente de Homologação
-Sempre que for testar um novo fornecedor, utilize o "Modo Debug". Ele imprimirá no log da tela quais colunas o robô detectou. Se o sistema não encontrar a coluna de descrição, ele te avisará exatamente o motivo, facilitando a identificação de padrões em PDFs novos.
