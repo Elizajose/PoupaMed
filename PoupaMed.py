@@ -1,5 +1,5 @@
 # =========================================================
-# V18.1 - ENGINE DE AUDITORIA FISCAL, IPI E QTD FORNECEDOR
+# V18 - ENGINE DE AUDITORIA FISCAL, IPI E QTD FORNECEDOR (CENÁRIO A)
 # =========================================================
 
 import streamlit as st
@@ -26,7 +26,7 @@ from datetime import datetime
 # =========================================================
 
 st.set_page_config(page_title="PoupaMed", layout="wide", page_icon="🩺")
-st.success("✨ ENGINE V18.1 ✨")
+st.success("✨ ENGINE V18.2 ✨")
 
 SCORE_MINIMO = 72
 DEBUG_MODE = True
@@ -170,11 +170,8 @@ def converter_preco(valor):
         
         preco = Decimal(valor)
         
-        # MELHORIA 8: Validação contextual do preço para evitar quantidades disfarçadas
-        if preco > 5000:
-            return None
-
-        if preco == int(preco) and preco > 20:
+        # Filtro de erro grotesco mantido, mas removido o bloqueio de inteiros
+        if preco > 100000:
             return None
             
         return preco
@@ -189,8 +186,15 @@ def formatar_brl(valor):
 
 def converter_decimal_seguro(valor, default="0"):
     try:
-        valor = str(valor).replace(".", "").replace(",", ".")
+        valor = str(valor).strip()
+
+        if "." in valor and "," in valor:
+            valor = valor.replace(".", "").replace(",", ".")
+        elif "," in valor:
+            valor = valor.replace(",", ".")
+
         return Decimal(valor)
+
     except:
         return Decimal(default)
 
@@ -698,8 +702,15 @@ if arquivo_cliente and arquivos_fornecedores:
 
             df_cliente = df_cliente.dropna(subset=[col_item_cliente])
             
-            # Força quantidade 1 caso o cliente não envie
-            df_cliente["Quantidade"] = 1
+            # ✅ CORREÇÃO 1: Preservar a quantidade cotada pelo cliente, se existir
+            if col_qtd_cliente:
+                df_cliente["Quantidade"] = pd.to_numeric(
+                    df_cliente[col_qtd_cliente],
+                    errors="coerce"
+                ).fillna(1)
+            else:
+                df_cliente["Quantidade"] = 1
+
             df_cliente["ITEM_MATCH"] = df_cliente[col_item_cliente].astype(str).apply(preparar_texto_match)
 
             if DEBUG_MODE:
@@ -791,8 +802,8 @@ if arquivo_cliente and arquivos_fornecedores:
                     item_original = str(linha_cliente[col_item_cliente]).strip()
                     item_match = linha_cliente["ITEM_MATCH"]
 
-                    # MELHORIA 6: Possível Bug com Decimal seguro
-                    qtd_original = Decimal(str(round(float(linha_cliente["Quantidade"]), 4)))
+                    # Salva a quantidade do cliente para exibir em caso de falha de match
+                    qtd_cliente = Decimal(str(round(float(linha_cliente["Quantidade"]), 4)))
 
                     candidatos_idx = set()
                     
@@ -843,6 +854,7 @@ if arquivo_cliente and arquivos_fornecedores:
                         
                         preco_unit = escolhido["preco"]
 
+                        # USA A QUANTIDADE REAL ENVIADA PELO FORNECEDOR CONFORME PEDIDO
                         qtd_fornecedor = Decimal(str(
                             escolhido["linha"]["Quantidade Fornecedor"]
                         ))
@@ -851,10 +863,12 @@ if arquivo_cliente and arquivos_fornecedores:
                             escolhido["linha"]["IPI"]
                         ))
 
+                        # ✅ CORREÇÃO 2: Subtotal utiliza a quantidade do fornecedor (Cenário A)
                         subtotal = (
                             preco_unit * qtd_fornecedor
                         )
 
+                        # ✅ CORREÇÃO 3: IPI entra após calcular o subtotal da quantidade
                         subtotal_com_ipi = subtotal * (
                             Decimal("1") + (
                                 ipi / Decimal("100")
@@ -872,7 +886,7 @@ if arquivo_cliente and arquivos_fornecedores:
                             "Item Desejado": item_original,
                             "Produto Encontrado": escolhido["linha"]["Descrição Limpa"],
                             "Compatibilidade": f"{escolhido['score']:.0f}%",
-                            "Qtd": float(qtd_fornecedor),
+                            "Qtd": float(qtd_fornecedor), # Reflete na tela a quantidade do fornecedor
                             "IPI": f"{ipi}%",
                             "Preço Unitário": formatar_brl(preco_unit),
                             "Subtotal": formatar_brl(subtotal_com_ipi)
@@ -886,7 +900,7 @@ if arquivo_cliente and arquivos_fornecedores:
                             "Item Desejado": item_original,
                             "Produto Encontrado": "❌ NÃO ENCONTRADO",
                             "Compatibilidade": "0%",
-                            "Qtd": 1.0,
+                            "Qtd": float(qtd_cliente), # Mantém a do cliente aqui porque não achou fornecedor
                             "IPI": "0%",
                             "Preço Unitário": "R$ 0,00",
                             "Subtotal": "R$ 0,00"
