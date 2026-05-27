@@ -1,5 +1,5 @@
 # =========================================================
-# V18.0 - ENGINE DE AUDITORIA FISCAL, IPI E QTD FORNECEDOR
+# V18.1 - ENGINE DE AUDITORIA FISCAL, IPI E QTD FORNECEDOR
 # =========================================================
 
 import streamlit as st
@@ -26,7 +26,7 @@ from datetime import datetime
 # =========================================================
 
 st.set_page_config(page_title="PoupaMed", layout="wide", page_icon="🩺")
-st.success("✨ ENGINE V18.0 ✨")
+st.success("✨ ENGINE V18.1 ✨")
 
 SCORE_MINIMO = 72
 DEBUG_MODE = True
@@ -58,6 +58,22 @@ BLACKLIST_SEMANTICA = [
     ("LATEX", "NITRILICA"),
     ("ESTERIL", "NAO ESTERIL"),
 ]
+
+# MELHORIA 7: Penalizar palavras críticas
+PALAVRAS_CRITICAS = [
+    "EDTA",
+    "GEL",
+    "CITRATO",
+    "HEPARINA",
+    "SERINGA",
+    "SCALP"
+]
+
+# MELHORIA 5: Stopwords para o índice
+STOPWORDS_MATCH = {
+    "KIT", "CX", "UND", "UN", "ML", "MG",
+    "G", "L", "PCT", "PARA", "COM"
+}
 
 # =========================================================
 # FUNÇÕES DE LIMPEZA E TEXTO
@@ -154,7 +170,11 @@ def converter_preco(valor):
         
         preco = Decimal(valor)
         
-        if preco < 0 or preco > 100000:
+        # MELHORIA 8: Validação contextual do preço para evitar quantidades disfarçadas
+        if preco > 5000:
+            return None
+
+        if preco == int(preco) and preco > 20:
             return None
             
         return preco
@@ -243,7 +263,15 @@ def calcular_score_rapidfuzz(texto1, texto2):
 
 def calcular_score_composto(item_cliente, item_fornecedor, texto_cliente, texto_fornecedor):
 
+    texto_cliente_norm = normalizar_texto(texto_cliente)
+    texto_fornecedor_norm = normalizar_texto(texto_fornecedor)
+
     score_textual = calcular_score_rapidfuzz(item_cliente, item_fornecedor)
+
+    # MELHORIA 7: Penalidade Crítica
+    for palavra in PALAVRAS_CRITICAS:
+        if palavra in texto_cliente_norm and palavra not in texto_fornecedor_norm:
+            score_textual -= 20
 
     palavras_cliente = set(item_cliente.split())
     palavras_fornecedor = set(item_fornecedor.split())
@@ -338,6 +366,9 @@ def extrair_tabela_pdf_local(arquivo_upload):
             
         df = pd.DataFrame(todas_linhas)
         
+        # MELHORIA 2: Bug de duplicação de linhas corrigido
+        df = df.drop_duplicates().reset_index(drop=True)
+        
         idx_cabecalho = -1
         for i, row in df.iterrows():
             linha_str = " ".join(row.astype(str)).lower()
@@ -412,6 +443,13 @@ def identificar_colunas_inteligente(df, nome_arquivo):
         ]):
             col_total = col
 
+    # MELHORIA 3: Correção do Bug Silencioso (.astype(str) adicionado)
+    if not col_desc:
+        for col in df.columns:
+            if df[col].astype(str).str.len().mean() > 10:
+                col_desc = col
+                break
+
     if DEBUG_MODE:
         st.info(
             f"📄 {nome_arquivo}: "
@@ -454,9 +492,28 @@ def limpar_tabela_hibrida(
         ]:
             continue
 
+        valor_preco = str(row[col_preco_nome]).strip() if col_preco_nome else ""
+
+        # MELHORIA 9: Bug em PDFs com coluna mesclada (Biocon)
+        multiplos_precos = re.findall(r'\d+[.,]\d+', valor_preco)
+        if len(multiplos_precos) >= 2:
+            valor_preco = multiplos_precos[0]
+
         preco_unit = converter_preco(
-            row[col_preco_nome]
-        ) if col_preco_nome else None
+            valor_preco
+        )
+
+        if preco_unit is None:
+            # MELHORIA 1: Pegar sempre o ÚLTIMO número da linha com regex restrito
+            numeros = re.findall(r'\b\d{1,4}[.,]\d{2,4}\b', texto_desc)
+            if numeros:
+                numero = numeros[-1]
+                preco_teste = converter_preco(numero)
+                
+                if preco_teste:
+                    desc_sem_preco = re.sub(r'\s*\b\d{1,4}[.,]\d{2,4}\b\s*$', '', texto_desc)
+                    texto_desc = desc_sem_preco.strip()
+                    preco_unit = preco_teste
 
         if preco_unit is None:
             continue
@@ -652,6 +709,9 @@ if arquivo_cliente and arquivos_fornecedores:
             resultados_finais = []
             detalhes_fornecedores = {}
 
+            # MELHORIA 4: Cache de performance
+            cache_scores = {}
+
             # =============================================
             # PROCESSAMENTO DOS FORNECEDORES
             # =============================================
@@ -730,15 +790,22 @@ if arquivo_cliente and arquivos_fornecedores:
                 for _, linha_cliente in df_cliente.iterrows():
                     item_original = str(linha_cliente[col_item_cliente]).strip()
                     item_match = linha_cliente["ITEM_MATCH"]
-                    qtd_original = Decimal(str(linha_cliente["Quantidade"]))
+
+                    # MELHORIA 6: Possível Bug com Decimal seguro
+                    qtd_original = Decimal(str(round(float(linha_cliente["Quantidade"]), 4)))
 
                     candidatos_idx = set()
-                    palavras_item = item_match.split()
+                    
+                    # MELHORIA 5: Limpando Stopwords do índice
+                    palavras_item = [
+                        p for p in item_match.split()
+                        if p not in STOPWORDS_MATCH and len(p) > 2
+                    ]
+
                     if palavras_item:
                         candidatos_idx.update(indice_fornecedor.get(f"PRIMEIRA_{palavras_item[0]}", []))
                         for palavra in palavras_item:
-                            if len(palavra) > 2:
-                                candidatos_idx.update(indice_fornecedor.get(palavra, []))
+                            candidatos_idx.update(indice_fornecedor.get(palavra, []))
 
                     if not candidatos_idx:
                         candidatos_idx = range(len(df_forn_processado))
@@ -753,12 +820,19 @@ if arquivo_cliente and arquivos_fornecedores:
                         if verificar_blacklist(item_original, linha_forn["Descrição Limpa"]):
                             continue
                         
-                        score = calcular_score_composto(
-                            item_match, 
-                            linha_forn["Descrição Match"],
-                            item_original,
-                            linha_forn["Descrição Limpa"]
-                        )
+                        # MELHORIA 4: Utilização do Cache
+                        chave = (item_match, linha_forn["Descrição Match"])
+
+                        if chave in cache_scores:
+                            score = cache_scores[chave]
+                        else:
+                            score = calcular_score_composto(
+                                item_match, 
+                                linha_forn["Descrição Match"],
+                                item_original,
+                                linha_forn["Descrição Limpa"]
+                            )
+                            cache_scores[chave] = score
                         
                         if score >= SCORE_MINIMO:
                             candidatos.append({"linha": linha_forn, "score": score, "preco": preco})
