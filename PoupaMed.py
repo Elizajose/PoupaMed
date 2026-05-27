@@ -1,5 +1,5 @@
 # =========================================================
-# V17.3 - CORREÇÃO DE TYPO E MELHORIA PARA TXT
+# V18.1 - ENGINE DE AUDITORIA FISCAL, IPI E QTD FORNECEDOR
 # =========================================================
 
 import streamlit as st
@@ -26,9 +26,9 @@ from datetime import datetime
 # =========================================================
 
 st.set_page_config(page_title="PoupaMed", layout="wide", page_icon="🩺")
-st.success("✨ ENGINE V17.4 ✨")
+st.success("✨ ENGINE V18.1 ✨")
 
-SCORE_MINIMO = 35
+SCORE_MINIMO = 72
 DEBUG_MODE = True
 
 # =========================================================
@@ -52,7 +52,28 @@ BLACKLIST_SEMANTICA = [
     ("DESCARTAVEL", "PERMANENTE"),
     ("VENOSO", "ARTERIAL"),
     ("SILICONE", "LATEX"),
+    ("C20", "C100"),
+    ("25X7", "40X12"),
+    ("20ML", "60ML"),
+    ("LATEX", "NITRILICA"),
+    ("ESTERIL", "NAO ESTERIL"),
 ]
+
+# MELHORIA 7: Penalizar palavras críticas
+PALAVRAS_CRITICAS = [
+    "EDTA",
+    "GEL",
+    "CITRATO",
+    "HEPARINA",
+    "SERINGA",
+    "SCALP"
+]
+
+# MELHORIA 5: Stopwords para o índice
+STOPWORDS_MATCH = {
+    "KIT", "CX", "UND", "UN", "ML", "MG",
+    "G", "L", "PCT", "PARA", "COM"
+}
 
 # =========================================================
 # FUNÇÕES DE LIMPEZA E TEXTO
@@ -149,7 +170,11 @@ def converter_preco(valor):
         
         preco = Decimal(valor)
         
-        if preco < 0 or preco > 100000:
+        # MELHORIA 8: Validação contextual do preço para evitar quantidades disfarçadas
+        if preco > 5000:
+            return None
+
+        if preco == int(preco) and preco > 20:
             return None
             
         return preco
@@ -161,6 +186,31 @@ def formatar_brl(valor):
     valor = valor.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     valor_str = f"{valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     return f"R$ {valor_str}"
+
+def converter_decimal_seguro(valor, default="0"):
+    try:
+        valor = str(valor).replace(".", "").replace(",", ".")
+        return Decimal(valor)
+    except:
+        return Decimal(default)
+
+def extrair_ipi_texto(texto):
+    texto = normalizar_texto(texto)
+    match = re.search(r'IPI\s*(\d+[\,\.]?\d*)\s*%', texto)
+    if match:
+        return converter_decimal_seguro(match.group(1))
+    return Decimal("0")
+
+def validar_preco_total(preco_unitario, quantidade, preco_total):
+    try:
+        calculado = (preco_unitario * quantidade).quantize(
+            Decimal("0.01"),
+            rounding=ROUND_HALF_UP
+        )
+        diferenca = abs(calculado - preco_total)
+        return diferenca <= Decimal("0.50")
+    except:
+        return True
 
 def extrair_medida(texto):
     """Extrai unidade de medida do texto"""
@@ -212,61 +262,75 @@ def calcular_score_rapidfuzz(texto1, texto2):
     return max(score1, score2, score3)
 
 def calcular_score_composto(item_cliente, item_fornecedor, texto_cliente, texto_fornecedor):
-    """
-    Score ponderado profissional:
-    - 70% similaridade textual (RapidFuzz multi-estratégia)
-    - 15% validação de medida
-    - 10% validação de embalagem
-    - 5% match de marca
-    """
-    
+
+    texto_cliente_norm = normalizar_texto(texto_cliente)
+    texto_fornecedor_norm = normalizar_texto(texto_fornecedor)
+
     score_textual = calcular_score_rapidfuzz(item_cliente, item_fornecedor)
-    
-    # Bônus de palavras-chave
+
+    # MELHORIA 7: Penalidade Crítica
+    for palavra in PALAVRAS_CRITICAS:
+        if palavra in texto_cliente_norm and palavra not in texto_fornecedor_norm:
+            score_textual -= 20
+
     palavras_cliente = set(item_cliente.split())
     palavras_fornecedor = set(item_fornecedor.split())
-    palavras_comuns = len(palavras_cliente.intersection(palavras_fornecedor))
+
+    palavras_comuns = len(
+        palavras_cliente.intersection(palavras_fornecedor)
+    )
+
     if palavras_comuns > 0:
         bonus_palavras = min(20, palavras_comuns * 5)
         score_textual = min(100, score_textual + bonus_palavras)
-    
-    # Validação de medida
+
     medida_cliente = extrair_medida(texto_cliente)
     medida_fornecedor = extrair_medida(texto_fornecedor)
-    
+
     score_medida = 0
+
     if not medida_cliente:
         score_medida = 15
+
     elif medida_cliente == medida_fornecedor:
         score_medida = 15
+
     elif medida_cliente and medida_fornecedor:
-        score_medida = 5
-    
-    # Validação de embalagem
+        score_medida = -30
+
     emb_cliente, qtd_cliente = extrair_embalagem(texto_cliente)
     emb_fornecedor, qtd_fornecedor = extrair_embalagem(texto_fornecedor)
-    
+
     score_embalagem = 0
+
     if not emb_cliente:
         score_embalagem = 10
+
     elif emb_cliente == emb_fornecedor:
         score_embalagem = 10
+
     elif emb_cliente and emb_fornecedor:
-        score_embalagem = 3
-    
-    # Match de marca
+        score_embalagem = -10
+
     marca_cliente = extrair_marca(texto_cliente)
     marca_fornecedor = extrair_marca(texto_fornecedor)
-    
+
     score_marca = 0
+
     if not marca_cliente:
         score_marca = 5
+
     elif marca_cliente == marca_fornecedor:
         score_marca = 5
-    
-    score_final = (score_textual * 0.7) + score_medida + score_embalagem + score_marca
-    
-    return score_final
+
+    score_final = (
+        (score_textual * 0.7)
+        + score_medida
+        + score_embalagem
+        + score_marca
+    )
+
+    return max(0, min(score_final, 100))
 
 # =========================================================
 # MOTORES DE EXTRAÇÃO
@@ -301,6 +365,9 @@ def extrair_tabela_pdf_local(arquivo_upload):
             return None
             
         df = pd.DataFrame(todas_linhas)
+        
+        # MELHORIA 2: Bug de duplicação de linhas corrigido
+        df = df.drop_duplicates().reset_index(drop=True)
         
         idx_cabecalho = -1
         for i, row in df.iterrows():
@@ -341,105 +408,169 @@ def extrair_tabela_pdf_local(arquivo_upload):
         return None
 
 def identificar_colunas_inteligente(df, nome_arquivo):
-    """Identifica colunas de descrição e preço"""
-    
+
     col_desc = None
     col_preco = None
-    
+    col_qtd = None
+    col_ipi = None
+    col_total = None
+
     for col in df.columns:
-        col_lower = col.lower()
-        if any(palavra in col_lower for palavra in ["descri", "produto", "item", "material"]):
+        col_lower = str(col).lower()
+
+        if any(p in col_lower for p in [
+            "descri", "produto", "item", "material"
+        ]):
             col_desc = col
-        if any(palavra in col_lower for palavra in ["preço", "preco", "valor", "unit", "preç", "prec"]):
+
+        if any(p in col_lower for p in [
+            "preço", "preco", "valor", "unit"
+        ]):
             col_preco = col
-    
+
+        if any(p in col_lower for p in [
+            "qtd", "quantidade"
+        ]):
+            col_qtd = col
+
+        if "ipi" in col_lower:
+            col_ipi = col
+
+        if any(p in col_lower for p in [
+            "preco total",
+            "valor total",
+            "total"
+        ]):
+            col_total = col
+
+    # MELHORIA 3: Correção do Bug Silencioso (.astype(str) adicionado)
     if not col_desc:
         for col in df.columns:
-            if df[col].dtype == 'object' and df[col].str.len().mean() > 10:
+            if df[col].astype(str).str.len().mean() > 10:
                 col_desc = col
                 break
-    
-    if not col_preco:
-        for col in df.columns:
-            sample = df[col].dropna().head(5)
-            if len(sample) > 0:
-                if any('R$' in str(val) or re.search(r'\d+[.,]\d{2}', str(val)) for val in sample):
-                    col_preco = col
-                    break
-    
-    if DEBUG_MODE and col_desc and col_preco:
-        st.info(f"📄 {nome_arquivo}: Descrição='{col_desc}', Preço='{col_preco}'")
-    elif DEBUG_MODE:
-        st.warning(f"⚠️ {nome_arquivo}: Não identificou colunas - Desc:{col_desc}, Preço:{col_preco}")
-    
-    return col_desc, col_preco
 
-def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, nome_arquivo="desconhecido"):
-    """Processa tabela com fallbacks automáticos"""
-    
-    if col_desc_nome is None:
-        if DEBUG_MODE:
-            st.warning(f"{nome_arquivo}: Sem coluna de descrição, usando primeira coluna")
-        col_desc_nome = df.columns[0]
-    
-    idx_desc = df.columns.get_loc(col_desc_nome)
-    col_seguinte = df.columns[idx_desc + 1] if idx_desc + 1 < len(df.columns) else None
+    if DEBUG_MODE:
+        st.info(
+            f"📄 {nome_arquivo}: "
+            f"Desc={col_desc} | "
+            f"Preço={col_preco} | "
+            f"Qtd={col_qtd} | "
+            f"IPI={col_ipi}"
+        )
+
+    return (
+        col_desc,
+        col_preco,
+        col_qtd,
+        col_ipi,
+        col_total
+    )
+
+def limpar_tabela_hibrida(
+    df,
+    col_desc_nome,
+    col_preco_nome,
+    col_qtd_nome=None,
+    col_ipi_nome=None,
+    col_total_nome=None,
+    nome_arquivo="desconhecido"
+):
 
     novas_descricoes = []
     novos_precos = []
+    novas_qtds = []
+    novos_ipis = []
+    novos_totais = []
 
-    for idx, row in df.iterrows():
+    for _, row in df.iterrows():
+
         texto_desc = str(row[col_desc_nome]).strip()
-        if not texto_desc or texto_desc in ["nan", "None", ""]:
+
+        if not texto_desc or texto_desc.lower() in [
+            "nan", "none", ""
+        ]:
             continue
-            
-        valor_preco = row[col_preco_nome] if col_preco_nome else None
-        preco_convertido = converter_preco(valor_preco)
 
-        if preco_convertido is None and col_seguinte:
-            preco_convertido = converter_preco(row[col_seguinte])
+        valor_preco = str(row[col_preco_nome]).strip() if col_preco_nome else ""
 
-        if preco_convertido is None:
-            match = re.search(r'(.*?)\s+(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})\s*$)', texto_desc)
-            if match:
-                preco_extraido = converter_preco(match.group(2).strip())
-                if preco_extraido and 0.01 <= preco_extraido <= 50000:
-                    novas_descricoes.append(match.group(1).strip())
-                    novos_precos.append(preco_extraido)
-                    continue
-            
-            numeros = re.findall(r'\d+[.,]\d{2}', texto_desc)
+        # MELHORIA 9: Bug em PDFs com coluna mesclada (Biocon)
+        multiplos_precos = re.findall(r'\d+[.,]\d+', valor_preco)
+        if len(multiplos_precos) >= 2:
+            valor_preco = multiplos_precos[0]
+
+        preco_unit = converter_preco(
+            valor_preco
+        )
+
+        if preco_unit is None:
+            # MELHORIA 1: Pegar sempre o ÚLTIMO número da linha com regex restrito
+            numeros = re.findall(r'\b\d{1,4}[.,]\d{2,4}\b', texto_desc)
             if numeros:
-                for numero in numeros:
-                    preco_teste = converter_preco(numero)
-                    if preco_teste and 0.01 <= preco_teste <= 50000:
-                        desc_sem_preco = re.sub(r'\s*\d+[.,]\d{2}\s*$', '', texto_desc)
-                        novas_descricoes.append(desc_sem_preco.strip())
-                        novos_precos.append(preco_teste)
-                        break
-                    else:
-                        novas_descricoes.append(texto_desc)
-                        novos_precos.append(None)
-            else:
-                novas_descricoes.append(texto_desc)
-                novos_precos.append(None)
+                numero = numeros[-1]
+                preco_teste = converter_preco(numero)
+                
+                if preco_teste:
+                    desc_sem_preco = re.sub(r'\s*\b\d{1,4}[.,]\d{2,4}\b\s*$', '', texto_desc)
+                    texto_desc = desc_sem_preco.strip()
+                    preco_unit = preco_teste
+
+        if preco_unit is None:
+            continue
+
+        quantidade = Decimal("1")
+
+        if col_qtd_nome:
+            quantidade = converter_decimal_seguro(
+                row[col_qtd_nome],
+                "1"
+            )
+
+        ipi = Decimal("0")
+
+        if col_ipi_nome:
+            ipi = converter_decimal_seguro(
+                row[col_ipi_nome],
+                "0"
+            )
+
         else:
-            novas_descricoes.append(texto_desc)
-            novos_precos.append(preco_convertido)
-    
+            ipi = extrair_ipi_texto(texto_desc)
+
+        preco_total = preco_unit * quantidade
+
+        if col_total_nome:
+            preco_total_arquivo = converter_preco(
+                row[col_total_nome]
+            )
+
+            if preco_total_arquivo:
+                preco_total = preco_total_arquivo
+
+        novas_descricoes.append(texto_desc)
+        novos_precos.append(preco_unit)
+        novas_qtds.append(quantidade)
+        novos_ipis.append(ipi)
+        novos_totais.append(preco_total)
+
     df_resultado = pd.DataFrame({
         "Descrição Limpa": novas_descricoes,
-        "Descrição Match": [preparar_texto_match(x) for x in novas_descricoes],
-        "Preço Unitário": novos_precos
+        "Descrição Match": [
+            preparar_texto_match(x)
+            for x in novas_descricoes
+        ],
+        "Preço Unitário": novos_precos,
+        "Quantidade Fornecedor": novas_qtds,
+        "IPI": novos_ipis,
+        "Preço Total": novos_totais
     })
-    
-    df_resultado = df_resultado[df_resultado["Descrição Limpa"].str.len() > 3]
-    
+
     if DEBUG_MODE:
-        st.success(f"✅ {nome_arquivo}: Processadas {len(df_resultado)} linhas com preços")
-        if len(df_resultado[df_resultado["Preço Unitário"].isna()]) > 0:
-            st.warning(f"⚠️ {nome_arquivo}: {len(df_resultado[df_resultado['Preço Unitário'].isna()])} linhas sem preço")
-    
+        st.success(
+            f"✅ {nome_arquivo}: "
+            f"{len(df_resultado)} itens processados"
+        )
+
     return df_resultado
 
 def criar_indice_fornecedor(df_forn_processado):
@@ -479,12 +610,23 @@ def gerar_pdf_relatorio(nome_fornecedor, total, itens_faltando, df_detalhes):
     elementos.append(info)
     elementos.append(Spacer(1, 20))
 
-    dados_tabela = [["Item Desejado", "Produto Encontrado", "Compat.", "Qtd", "Preço Unit.", "Subtotal"]]
+    dados_tabela = [
+        [
+            "Item Desejado",
+            "Produto Encontrado",
+            "Compat.",
+            "Qtd",
+            "IPI",
+            "Preço Unit.",
+            "Subtotal"
+        ]
+    ]
     for _, row in df_detalhes.iterrows():
         dados_tabela.append([str(row["Item Desejado"]), str(row["Produto Encontrado"]), 
-                            str(row["Compatibilidade"]), str(row["Qtd"]), 
+                            str(row["Compatibilidade"]), str(row["Qtd"]), str(row["IPI"]),
                             str(row["Preço Unitário"]), str(row["Subtotal"])])
-    dados_tabela.append(["", "", "", "", "TOTAL GERAL", formatar_brl(total)])
+    
+    dados_tabela.append(["", "", "", "", "", "TOTAL GERAL", formatar_brl(total)])
 
     tabela = Table(dados_tabela, repeatRows=1)
     ultima_linha = len(dados_tabela) - 1
@@ -523,7 +665,7 @@ if debug_check != DEBUG_MODE:
     DEBUG_MODE = debug_check
     st.rerun()
 
-score_ajuste = st.sidebar.slider("🎯 Score mínimo para match", 20, 80, SCORE_MINIMO, 5)
+score_ajuste = st.sidebar.slider("🎯 Score mínimo para match", 20, 100, SCORE_MINIMO, 5)
 if score_ajuste != SCORE_MINIMO:
     SCORE_MINIMO = score_ajuste
     st.rerun()
@@ -533,7 +675,7 @@ if arquivo_cliente and arquivos_fornecedores:
         with st.spinner("Processando arquivos..."):
             
             # =============================================
-            # LEITURA DA LISTA DE DESEJOS (CORRIGIDA)
+            # LEITURA DA LISTA DE DESEJOS
             # =============================================
             if arquivo_cliente.name.endswith(".xlsx"):
                 df_cliente = pd.read_excel(arquivo_cliente)
@@ -550,14 +692,14 @@ if arquivo_cliente and arquivos_fornecedores:
             col_item_cliente = next((c for c in df_cliente.columns if any(palavra in c.lower() for palavra in ["descri", "produto", "item"])), None)
             col_qtd_cliente = next((c for c in df_cliente.columns if any(palavra in c.lower() for palavra in ["qtd", "quant"])), None)
 
-            if not col_item_cliente or not col_qtd_cliente:
-                st.error(f"Não encontrei as colunas Produto e Quantidade. Colunas disponíveis: {list(df_cliente.columns)}")
+            if not col_item_cliente:
+                st.error("Não encontrei coluna de Produto")
                 st.stop()
 
             df_cliente = df_cliente.dropna(subset=[col_item_cliente])
             
-            # ✅ CORREÇÃO AQUI: fillna() em vez de fillada()
-            df_cliente["Quantidade"] = pd.to_numeric(df_cliente[col_qtd_cliente], errors='coerce').fillna(0)
+            # Força quantidade 1 caso o cliente não envie
+            df_cliente["Quantidade"] = 1
             df_cliente["ITEM_MATCH"] = df_cliente[col_item_cliente].astype(str).apply(preparar_texto_match)
 
             if DEBUG_MODE:
@@ -566,6 +708,9 @@ if arquivo_cliente and arquivos_fornecedores:
 
             resultados_finais = []
             detalhes_fornecedores = {}
+
+            # MELHORIA 4: Cache de performance
+            cache_scores = {}
 
             # =============================================
             # PROCESSAMENTO DOS FORNECEDORES
@@ -601,14 +746,31 @@ if arquivo_cliente and arquivos_fornecedores:
                 df_forn.columns = df_forn.columns.astype(str).str.strip()
                 df_forn = df_forn.loc[:, ~df_forn.columns.duplicated()].copy()
 
-                coluna_desc, coluna_preco = identificar_colunas_inteligente(df_forn, nome_fornecedor)
+                (
+                    coluna_desc,
+                    coluna_preco,
+                    coluna_qtd,
+                    coluna_ipi,
+                    coluna_total
+                ) = identificar_colunas_inteligente(
+                    df_forn,
+                    nome_fornecedor
+                )
 
                 if not coluna_desc:
                     if DEBUG_MODE:
                         st.warning(f"⚠️ Arquivo '{arq.name}' ignorado - sem coluna de Descrição.")
                     continue
 
-                df_forn_processado = limpar_tabela_hibrida(df_forn, coluna_desc, coluna_preco, nome_fornecedor)
+                df_forn_processado = limpar_tabela_hibrida(
+                    df_forn,
+                    coluna_desc,
+                    coluna_preco,
+                    coluna_qtd,
+                    coluna_ipi,
+                    coluna_total,
+                    nome_fornecedor
+                )
                 
                 if len(df_forn_processado) == 0:
                     if DEBUG_MODE:
@@ -617,7 +779,7 @@ if arquivo_cliente and arquivos_fornecedores:
                 
                 if DEBUG_MODE:
                     st.info(f"📋 Amostra dos produtos do fornecedor:")
-                    st.dataframe(df_forn_processado[["Descrição Limpa", "Preço Unitário"]].head(5))
+                    st.dataframe(df_forn_processado.head(5))
                 
                 indice_fornecedor = criar_indice_fornecedor(df_forn_processado)
 
@@ -628,15 +790,22 @@ if arquivo_cliente and arquivos_fornecedores:
                 for _, linha_cliente in df_cliente.iterrows():
                     item_original = str(linha_cliente[col_item_cliente]).strip()
                     item_match = linha_cliente["ITEM_MATCH"]
-                    qtd = Decimal(str(linha_cliente["Quantidade"]))
+
+                    # MELHORIA 6: Possível Bug com Decimal seguro
+                    qtd_original = Decimal(str(round(float(linha_cliente["Quantidade"]), 4)))
 
                     candidatos_idx = set()
-                    palavras_item = item_match.split()
+                    
+                    # MELHORIA 5: Limpando Stopwords do índice
+                    palavras_item = [
+                        p for p in item_match.split()
+                        if p not in STOPWORDS_MATCH and len(p) > 2
+                    ]
+
                     if palavras_item:
                         candidatos_idx.update(indice_fornecedor.get(f"PRIMEIRA_{palavras_item[0]}", []))
                         for palavra in palavras_item:
-                            if len(palavra) > 2:
-                                candidatos_idx.update(indice_fornecedor.get(palavra, []))
+                            candidatos_idx.update(indice_fornecedor.get(palavra, []))
 
                     if not candidatos_idx:
                         candidatos_idx = range(len(df_forn_processado))
@@ -651,12 +820,19 @@ if arquivo_cliente and arquivos_fornecedores:
                         if verificar_blacklist(item_original, linha_forn["Descrição Limpa"]):
                             continue
                         
-                        score = calcular_score_composto(
-                            item_match, 
-                            linha_forn["Descrição Match"],
-                            item_original,
-                            linha_forn["Descrição Limpa"]
-                        )
+                        # MELHORIA 4: Utilização do Cache
+                        chave = (item_match, linha_forn["Descrição Match"])
+
+                        if chave in cache_scores:
+                            score = cache_scores[chave]
+                        else:
+                            score = calcular_score_composto(
+                                item_match, 
+                                linha_forn["Descrição Match"],
+                                item_original,
+                                linha_forn["Descrição Limpa"]
+                            )
+                            cache_scores[chave] = score
                         
                         if score >= SCORE_MINIMO:
                             candidatos.append({"linha": linha_forn, "score": score, "preco": preco})
@@ -664,17 +840,42 @@ if arquivo_cliente and arquivos_fornecedores:
                     if candidatos:
                         candidatos = sorted(candidatos, key=lambda x: (-x["score"], x["preco"]))
                         escolhido = candidatos[0]
+                        
                         preco_unit = escolhido["preco"]
-                        subtotal = (preco_unit * qtd).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-                        total_carrinho += subtotal
+
+                        qtd_fornecedor = Decimal(str(
+                            escolhido["linha"]["Quantidade Fornecedor"]
+                        ))
+
+                        ipi = Decimal(str(
+                            escolhido["linha"]["IPI"]
+                        ))
+
+                        subtotal = (
+                            preco_unit * qtd_fornecedor
+                        )
+
+                        subtotal_com_ipi = subtotal * (
+                            Decimal("1") + (
+                                ipi / Decimal("100")
+                            )
+                        )
+
+                        subtotal_com_ipi = subtotal_com_ipi.quantize(
+                            Decimal("0.01"),
+                            rounding=ROUND_HALF_UP
+                        )
+
+                        total_carrinho += subtotal_com_ipi
 
                         itens_detalhados.append({
                             "Item Desejado": item_original,
                             "Produto Encontrado": escolhido["linha"]["Descrição Limpa"],
                             "Compatibilidade": f"{escolhido['score']:.0f}%",
-                            "Qtd": float(qtd),
+                            "Qtd": float(qtd_fornecedor),
+                            "IPI": f"{ipi}%",
                             "Preço Unitário": formatar_brl(preco_unit),
-                            "Subtotal": formatar_brl(subtotal)
+                            "Subtotal": formatar_brl(subtotal_com_ipi)
                         })
                         
                         if DEBUG_MODE and escolhido['score'] < 70:
@@ -685,7 +886,8 @@ if arquivo_cliente and arquivos_fornecedores:
                             "Item Desejado": item_original,
                             "Produto Encontrado": "❌ NÃO ENCONTRADO",
                             "Compatibilidade": "0%",
-                            "Qtd": float(qtd),
+                            "Qtd": 1.0,
+                            "IPI": "0%",
                             "Preço Unitário": "R$ 0,00",
                             "Subtotal": "R$ 0,00"
                         })
