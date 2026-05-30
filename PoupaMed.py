@@ -26,7 +26,7 @@ from datetime import datetime
 # =========================================================
 
 st.set_page_config(page_title="PoupaMed", layout="wide", page_icon="🩺")
-st.success("✨ ENGINE V18.8 - ALERTAS INTELIGENTES ✨")
+st.success("✨ ENGINE DE COTAÇÃO - ALERTAS INTELIGENTES ✨")
 
 SCORE_MINIMO = 72
 DEBUG_MODE = True
