@@ -1,5 +1,5 @@
 # =========================================================
-# V18.6 - ENGINE DE AUDITORIA: NOMENCLATURAS E COLUNAS CLARAS
+# V19.0 - ENGINE DE COTAÇÃO
 # =========================================================
 
 import streamlit as st
@@ -26,7 +26,7 @@ from datetime import datetime
 # =========================================================
 
 st.set_page_config(page_title="PoupaMed", layout="wide", page_icon="🩺")
-st.success("✨ ENGINE V18.6 - AUDITORIA TRANSPARENTE ✨")
+st.success("✨ ENGINE V18.7 - AUDITORIA TRANSPARENTE ✨")
 
 SCORE_MINIMO = 72
 DEBUG_MODE = True
@@ -396,7 +396,6 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
             if preco_total_arquivo:
                 preco_total_base = preco_total_arquivo
                 
-                # ENGENHARIA REVERSA DA QUANTIDADE
                 if preco_unit > Decimal("0"):
                     qtd_reversa = (preco_total_base / preco_unit).quantize(Decimal("0.00"), rounding=ROUND_HALF_UP).normalize()
                     quantidade = qtd_reversa
@@ -407,7 +406,7 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
         novas_descricoes.append(texto_desc)
         novos_precos.append(preco_unit)
         novas_qtds.append(quantidade)
-        novas_ipis.append(ipi) 
+        novos_ipis.append(ipi) 
         novos_totais_base.append(preco_total_base)
 
     df_resultado = pd.DataFrame({
@@ -455,7 +454,6 @@ def gerar_pdf_relatorio(nome_fornecedor, total, itens_faltando, df_detalhes):
     elementos.append(info)
     elementos.append(Spacer(1, 20))
 
-    # Tabela com as colunas renomeadas para máxima clareza
     dados_tabela = [["Item Desejado", "Produto Encontrado", "Compat.", "Qtd", "Preço Unit.", "Total s/ IPI", "IPI", "Total c/ IPI"]]
     for _, row in df_detalhes.iterrows():
         dados_tabela.append([str(row["Item Desejado"])[:25], str(row["Produto Encontrado"])[:25], 
@@ -621,7 +619,6 @@ if arquivo_cliente and arquivos_fornecedores:
 
                         total_carrinho += subtotal_com_ipi
 
-                        # Dicionário com nomenclaturas transparentes
                         itens_detalhados.append({
                             "Item Desejado": item_original,
                             "Produto Encontrado": escolhido["linha"]["Descrição Limpa"],
