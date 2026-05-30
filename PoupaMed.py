@@ -358,8 +358,8 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
     novas_descricoes = []
     novos_precos = []
     novas_qtds = []
-    novos_ipis = []
-    novos_totais_base = [] # Guarda o total que veio na planilha
+    novos_ipis = [] # <-- Declarado com 'o'
+    novos_totais_base = [] 
 
     for _, row in df.iterrows():
         texto_desc = str(row[col_desc_nome]).strip()
@@ -393,7 +393,6 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
         else:
             ipi = extrair_ipi_texto(texto_desc)
 
-        # ✅ REFATORAÇÃO: Extrai o Total Nativo se existir; senão, fallback para cálculo seguro
         preco_total_base = None
         if col_total_nome:
             preco_total_arquivo = converter_preco(row[col_total_nome])
@@ -406,8 +405,8 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
         novas_descricoes.append(texto_desc)
         novos_precos.append(preco_unit)
         novas_qtds.append(quantidade)
-        novas_ipis.append(ipi)
-        novas_totais_base.append(preco_total_base)
+        novos_ipis.append(ipi) # ✅ CORRIGIDO AQUI PARA "novos_ipis" com 'o'
+        novos_totais_base.append(preco_total_base)
 
     df_resultado = pd.DataFrame({
         "Descrição Limpa": novas_descricoes,
