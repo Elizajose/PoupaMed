@@ -1,5 +1,5 @@
 # =========================================================
-# V19.0 - ENGINE DE COTAÇÃO
+# V19.0 - ENGINE DE AUDITORIA: ALERTAS DE COMPRA FRACIONADA
 # =========================================================
 
 import streamlit as st
@@ -26,7 +26,7 @@ from datetime import datetime
 # =========================================================
 
 st.set_page_config(page_title="PoupaMed", layout="wide", page_icon="🩺")
-st.success("✨ ENGINE V18.7 - AUDITORIA TRANSPARENTE ✨")
+st.success("✨ ENGINE V18.8 - ALERTAS INTELIGENTES ✨")
 
 SCORE_MINIMO = 72
 DEBUG_MODE = True
@@ -652,8 +652,9 @@ if arquivo_cliente and arquivos_fornecedores:
 
                 st.markdown("## 🏆 Resultado da Cotação")
                 cols = st.columns(min(len(df_resultados), 4))
-                melhor_total = df_resultados.iloc[0]["Total"] if len(df_resultados) > 0 else Decimal("0")
-
+                melhor_fornecedor = df_resultados.iloc[0]
+                melhor_total = melhor_fornecedor["Total"]
+                
                 for i, row in df_resultados.head(4).iterrows():
                     with cols[i]:
                         if i == 0:
@@ -661,6 +662,21 @@ if arquivo_cliente and arquivos_fornecedores:
                         else:
                             diferenca = row['Total'] - melhor_total
                             st.metric(label=row["Fornecedor"], value=formatar_brl(row["Total"]), delta=f"{'+' if diferenca >= 0 else ''}{formatar_brl(diferenca)}", delta_color="inverse")
+
+                # ✨ LÓGICA DO ALERTA DE COMPRA FRACIONADA ✨
+                alertas_fracionados = []
+                for i, row in df_resultados.iterrows():
+                    if i > 0 and row["Total"] < melhor_total:
+                        economia = melhor_total - row["Total"]
+                        alertas_fracionados.append(
+                            f"**{row['Fornecedor']}** está **{formatar_brl(economia)} mais barato**, mas deixou de cotar **{row['Itens Faltando']} item(ns)**."
+                        )
+                
+                if alertas_fracionados:
+                    st.warning("⚠️ **Alerta de Oportunidade (Possível Compra Fracionada):**")
+                    for alerta in alertas_fracionados:
+                        st.write(f"- {alerta}")
+                    st.info("💡 *A plataforma deu a vitória para a empresa com a lista mais completa, mas avalie se não vale a pena fazer uma compra separada!*")
 
                 st.write("---")
                 st.markdown("## 🔍 Auditoria Inteligente")
