@@ -1,5 +1,5 @@
 # =========================================================
-# V19.0 - ENGINE DE AUDITORIA: ALERTAS DE COMPRA FRACIONADA
+# V19.0 - ENGINE DE AUDITORIA: BOTÃO, NOMES COMPLETOS E MATH FIX
 # =========================================================
 
 import streamlit as st
@@ -26,7 +26,7 @@ from datetime import datetime
 # =========================================================
 
 st.set_page_config(page_title="PoupaMed", layout="wide", page_icon="🩺")
-st.success("✨ ENGINE DE COTAÇÃO - ALERTAS INTELIGENTES ✨")
+st.success("✨ ENGINE V19.0 - COTAÇÃO SOB DEMANDA ✨")
 
 SCORE_MINIMO = 72
 DEBUG_MODE = True
@@ -131,8 +131,8 @@ def converter_preco(valor):
     valor = str(valor).strip()
     if valor in ["", "nan", "None", "NaN"]: return None
     
-    if 'R$' in valor:
-        valor = valor.replace("R$", "").replace(" ", "")
+    # Remove espaços que quebram os milhares (ex: "3 735,86" vira "3735,86")
+    valor = valor.replace("R$", "").replace(" ", "")
     
     try:
         if "," in valor and "." in valor:
@@ -157,7 +157,7 @@ def formatar_brl(valor):
 
 def converter_decimal_seguro(valor, default="0"):
     try:
-        valor = str(valor).strip().upper()
+        valor = str(valor).strip().upper().replace(" ", "")
         valor_limpo = re.sub(r'[^0-9,\.]', '', valor)
         
         if not valor_limpo: return Decimal(default)
@@ -363,18 +363,21 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
         if not texto_desc or texto_desc.lower() in ["nan", "none", ""]: continue
 
         valor_preco = str(row[col_preco_nome]).strip() if col_preco_nome else ""
-        multiplos_precos = re.findall(r'\d+[.,]\d+', valor_preco)
+        valor_preco = valor_preco.replace(" ", "") # BLINDAGEM DE ESPAÇOS EM NÚMEROS
+        
+        multiplos_precos = re.findall(r'\d{1,}(?:[.,]\d{3})*(?:[.,]\d+)?', valor_preco)
         if len(multiplos_precos) >= 2: valor_preco = multiplos_precos[0]
 
         preco_unit = converter_preco(valor_preco)
 
         if preco_unit is None:
-            numeros = re.findall(r'\b\d{1,4}[.,]\d{2,4}\b', texto_desc)
+            texto_desc_limpo = texto_desc.replace(" ", "")
+            numeros = re.findall(r'\b\d{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?\b', texto_desc_limpo)
             if numeros:
                 numero = numeros[-1]
                 preco_teste = converter_preco(numero)
                 if preco_teste:
-                    desc_sem_preco = re.sub(r'\s*\b\d{1,4}[.,]\d{2,4}\b\s*$', '', texto_desc)
+                    desc_sem_preco = re.sub(r'\s*\b\d{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?\b\s*$', '', texto_desc)
                     texto_desc = desc_sem_preco.strip()
                     preco_unit = preco_teste
 
@@ -392,7 +395,7 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
 
         preco_total_base = None
         if col_total_nome:
-            preco_total_arquivo = converter_preco(row[col_total_nome])
+            preco_total_arquivo = converter_preco(str(row[col_total_nome]).replace(" ", ""))
             if preco_total_arquivo:
                 preco_total_base = preco_total_arquivo
                 
@@ -437,9 +440,12 @@ def criar_indice_fornecedor(df_forn_processado):
 
 def gerar_pdf_relatorio(nome_fornecedor, total, itens_faltando, df_detalhes):
     buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=20, topMargin=30, bottomMargin=30)
     elementos = []
+    
     styles = getSampleStyleSheet()
+    style_normal = styles['BodyText']
+    style_normal.fontSize = 8 # Letra menor para caber nomes completos
 
     elementos.append(Paragraph("<b>RELATÓRIO DE COTAÇÃO HOSPITALAR</b>", styles['Title']))
     elementos.append(Spacer(1, 12))
@@ -456,14 +462,19 @@ def gerar_pdf_relatorio(nome_fornecedor, total, itens_faltando, df_detalhes):
 
     dados_tabela = [["Item Desejado", "Produto Encontrado", "Compat.", "Qtd", "Preço Unit.", "Total s/ IPI", "IPI", "Total c/ IPI"]]
     for _, row in df_detalhes.iterrows():
-        dados_tabela.append([str(row["Item Desejado"])[:25], str(row["Produto Encontrado"])[:25], 
+        # Uso do Paragraph garante que nomes grandes sejam empurrados para a linha de baixo, sem cortar.
+        item_desejado = Paragraph(str(row["Item Desejado"]), style_normal)
+        produto_encontrado = Paragraph(str(row["Produto Encontrado"]), style_normal)
+        
+        dados_tabela.append([item_desejado, produto_encontrado, 
                             str(row["Compatibilidade"]), str(row["Qtd"]), 
                             str(row["Preço Unitário"]), str(row["Total s/ IPI"]), 
                             str(row["IPI"]), str(row["Total c/ IPI"])])
     
     dados_tabela.append(["", "", "", "", "", "", "TOTAL GERAL", formatar_brl(total)])
 
-    tabela = Table(dados_tabela, repeatRows=1)
+    # Ajuste nas larguras das colunas para os textos longos respirarem
+    tabela = Table(dados_tabela, repeatRows=1, colWidths=[110, 110, 45, 35, 55, 60, 30, 65])
     ultima_linha = len(dados_tabela) - 1
     tabela.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#1f4e78")),
@@ -505,195 +516,196 @@ if score_ajuste != SCORE_MINIMO:
     SCORE_MINIMO = score_ajuste
     st.rerun()
 
+# 🚀 AQUI ENTRA O BOTÃO DE AÇÃO MANUAL
 if arquivo_cliente and arquivos_fornecedores:
-    try:
-        with st.spinner("Extraindo e processando dados comerciais..."):
-            if arquivo_cliente.name.endswith(".xlsx"):
-                df_cliente = pd.read_excel(arquivo_cliente)
-            elif arquivo_cliente.name.endswith(".txt"):
-                df_cliente = ler_lista_desejos_txt(arquivo_cliente)
-                if df_cliente is None: st.stop()
-            else:
-                df_cliente = pd.read_csv(arquivo_cliente, sep=None, engine="python")
-
-            df_cliente.columns = df_cliente.columns.astype(str).str.strip()
-            df_cliente = df_cliente.loc[:, ~df_cliente.columns.duplicated()].copy()
-
-            col_item_cliente = next((c for c in df_cliente.columns if any(palavra in c.lower() for palavra in ["descri", "produto", "item"])), None)
-            col_qtd_cliente = next((c for c in df_cliente.columns if any(palavra in c.lower() for palavra in ["qtd", "quant"])), None)
-
-            if not col_item_cliente:
-                st.error("Não encontrei coluna de Produto")
-                st.stop()
-
-            df_cliente = df_cliente.dropna(subset=[col_item_cliente])
-            
-            if col_qtd_cliente:
-                df_cliente["Quantidade"] = pd.to_numeric(df_cliente[col_qtd_cliente], errors="coerce").fillna(1)
-            else:
-                df_cliente["Quantidade"] = 1
-
-            df_cliente["ITEM_MATCH"] = df_cliente[col_item_cliente].astype(str).apply(preparar_texto_match)
-
-            resultados_finais = []
-            detalhes_fornecedores = {}
-            cache_scores = {}
-
-            for arq in arquivos_fornecedores:
-                nome_fornecedor = arq.name.rsplit('.', 1)[0].upper()
-                contador = 1
-                nome_original = nome_fornecedor
-                while nome_fornecedor in detalhes_fornecedores:
-                    nome_fornecedor = f"{nome_original}_{contador}"
-                    contador += 1
-
-                if arq.name.endswith(".xlsx"):
-                    df_forn = pd.read_excel(arq)
-                elif arq.name.endswith(".pdf"):
-                    df_forn = extrair_tabela_pdf_local(arq)
-                    if df_forn is None: continue
+    if st.sidebar.button("🚀 GERAR COTAÇÃO", use_container_width=True, type="primary"):
+        try:
+            with st.spinner("Extraindo e processando dados comerciais..."):
+                if arquivo_cliente.name.endswith(".xlsx"):
+                    df_cliente = pd.read_excel(arquivo_cliente)
+                elif arquivo_cliente.name.endswith(".txt"):
+                    df_cliente = ler_lista_desejos_txt(arquivo_cliente)
+                    if df_cliente is None: st.stop()
                 else:
-                    try:
-                        df_forn = pd.read_csv(arq, sep=None, engine="python", encoding='utf-8')
-                    except UnicodeDecodeError:
-                        arq.seek(0)
-                        df_forn = pd.read_csv(arq, sep=None, engine="python", encoding='latin-1')
+                    df_cliente = pd.read_csv(arquivo_cliente, sep=None, engine="python")
 
-                df_forn.columns = df_forn.columns.astype(str).str.strip()
-                df_forn = df_forn.loc[:, ~df_forn.columns.duplicated()].copy()
+                df_cliente.columns = df_cliente.columns.astype(str).str.strip()
+                df_cliente = df_cliente.loc[:, ~df_cliente.columns.duplicated()].copy()
 
-                colunas = identificar_colunas_inteligente(df_forn, nome_fornecedor)
-                if not colunas[0]: continue 
+                col_item_cliente = next((c for c in df_cliente.columns if any(palavra in c.lower() for palavra in ["descri", "produto", "item"])), None)
+                col_qtd_cliente = next((c for c in df_cliente.columns if any(palavra in c.lower() for palavra in ["qtd", "quant"])), None)
 
-                df_forn_processado = limpar_tabela_hibrida(df_forn, *colunas, nome_fornecedor)
-                if len(df_forn_processado) == 0: continue
+                if not col_item_cliente:
+                    st.error("Não encontrei coluna de Produto")
+                    st.stop()
+
+                df_cliente = df_cliente.dropna(subset=[col_item_cliente])
                 
-                indice_fornecedor = criar_indice_fornecedor(df_forn_processado)
+                if col_qtd_cliente:
+                    df_cliente["Quantidade"] = pd.to_numeric(df_cliente[col_qtd_cliente], errors="coerce").fillna(1)
+                else:
+                    df_cliente["Quantidade"] = 1
 
-                total_carrinho = Decimal("0.00")
-                itens_nao_encontrados = 0
-                itens_detalhados = []
+                df_cliente["ITEM_MATCH"] = df_cliente[col_item_cliente].astype(str).apply(preparar_texto_match)
 
-                for _, linha_cliente in df_cliente.iterrows():
-                    item_original = str(linha_cliente[col_item_cliente]).strip()
-                    item_match = linha_cliente["ITEM_MATCH"]
-                    qtd_cliente = Decimal(str(round(float(linha_cliente["Quantidade"]), 4)))
+                resultados_finais = []
+                detalhes_fornecedores = {}
+                cache_scores = {}
 
-                    candidatos_idx = set()
-                    palavras_item = [p for p in item_match.split() if p not in STOPWORDS_MATCH and len(p) > 2]
+                for arq in arquivos_fornecedores:
+                    nome_fornecedor = arq.name.rsplit('.', 1)[0].upper()
+                    contador = 1
+                    nome_original = nome_fornecedor
+                    while nome_fornecedor in detalhes_fornecedores:
+                        nome_fornecedor = f"{nome_original}_{contador}"
+                        contador += 1
 
-                    if palavras_item:
-                        candidatos_idx.update(indice_fornecedor.get(f"PRIMEIRA_{palavras_item[0]}", []))
-                        for palavra in palavras_item:
-                            candidatos_idx.update(indice_fornecedor.get(palavra, []))
-
-                    if not candidatos_idx:
-                        candidatos_idx = range(len(df_forn_processado))
-
-                    candidatos = []
-                    for idx in candidatos_idx:
-                        linha_forn = df_forn_processado.iloc[idx]
-                        if verificar_blacklist(item_original, linha_forn["Descrição Limpa"]): continue
-                        
-                        chave = (item_match, linha_forn["Descrição Match"])
-                        if chave in cache_scores:
-                            score = cache_scores[chave]
-                        else:
-                            score = calcular_score_composto(item_match, linha_forn["Descrição Match"], item_original, linha_forn["Descrição Limpa"])
-                            cache_scores[chave] = score
-                        
-                        if score >= SCORE_MINIMO:
-                            candidatos.append({"linha": linha_forn, "score": score, "preco_base": linha_forn["Preço Total Base"]})
-
-                    if candidatos:
-                        candidatos = sorted(candidatos, key=lambda x: (-x["score"], x["preco_base"]))
-                        escolhido = candidatos[0]
-                        
-                        qtd_fornecedor = Decimal(str(escolhido["linha"]["Quantidade Fornecedor"]))
-                        ipi = Decimal(str(escolhido["linha"]["IPI"]))
-                        preco_total_base = Decimal(str(escolhido["linha"]["Preço Total Base"]))
-                        preco_unitario = Decimal(str(escolhido["linha"]["Preço Unitário"]))
-
-                        subtotal_com_ipi = preco_total_base * (Decimal("1") + (ipi / Decimal("100")))
-                        subtotal_com_ipi = subtotal_com_ipi.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-
-                        total_carrinho += subtotal_com_ipi
-
-                        itens_detalhados.append({
-                            "Item Desejado": item_original,
-                            "Produto Encontrado": escolhido["linha"]["Descrição Limpa"],
-                            "Compatibilidade": f"{escolhido['score']:.0f}%",
-                            "Qtd": float(qtd_fornecedor),
-                            "Preço Unitário": formatar_brl(preco_unitario),
-                            "Total s/ IPI": formatar_brl(preco_total_base),
-                            "IPI": f"{ipi}%",
-                            "Total c/ IPI": formatar_brl(subtotal_com_ipi)
-                        })
+                    if arq.name.endswith(".xlsx"):
+                        df_forn = pd.read_excel(arq)
+                    elif arq.name.endswith(".pdf"):
+                        df_forn = extrair_tabela_pdf_local(arq)
+                        if df_forn is None: continue
                     else:
-                        itens_nao_encontrados += 1
-                        itens_detalhados.append({
-                            "Item Desejado": item_original,
-                            "Produto Encontrado": "❌ NÃO ENCONTRADO",
-                            "Compatibilidade": "0%",
-                            "Qtd": float(qtd_cliente),
-                            "Preço Unitário": "R$ 0,00",
-                            "Total s/ IPI": "R$ 0,00",
-                            "IPI": "0%",
-                            "Total c/ IPI": "R$ 0,00"
-                        })
+                        try:
+                            df_forn = pd.read_csv(arq, sep=None, engine="python", encoding='utf-8')
+                        except UnicodeDecodeError:
+                            arq.seek(0)
+                            df_forn = pd.read_csv(arq, sep=None, engine="python", encoding='latin-1')
 
-                resultados_finais.append({"Fornecedor": nome_fornecedor, "Total": total_carrinho, "Itens Faltando": itens_nao_encontrados})
-                detalhes_fornecedores[nome_fornecedor] = pd.DataFrame(itens_detalhados)
+                    df_forn.columns = df_forn.columns.astype(str).str.strip()
+                    df_forn = df_forn.loc[:, ~df_forn.columns.duplicated()].copy()
 
-            if resultados_finais:
-                df_resultados = pd.DataFrame(resultados_finais)
-                df_resultados["Total_Ordenacao"] = df_resultados["Total"].apply(lambda x: float(x))
-                df_resultados = df_resultados.sort_values(by=["Itens Faltando", "Total_Ordenacao"]).reset_index(drop=True)
+                    colunas = identificar_colunas_inteligente(df_forn, nome_fornecedor)
+                    if not colunas[0]: continue 
 
-                st.markdown("## 🏆 Resultado da Cotação")
-                cols = st.columns(min(len(df_resultados), 4))
-                melhor_fornecedor = df_resultados.iloc[0]
-                melhor_total = melhor_fornecedor["Total"]
-                
-                for i, row in df_resultados.head(4).iterrows():
-                    with cols[i]:
-                        if i == 0:
-                            st.metric(label=f"🥇 {row['Fornecedor']}", value=formatar_brl(row["Total"]), delta=f"{row['Itens Faltando']} itens faltando")
+                    df_forn_processado = limpar_tabela_hibrida(df_forn, *colunas, nome_fornecedor)
+                    if len(df_forn_processado) == 0: continue
+                    
+                    indice_fornecedor = criar_indice_fornecedor(df_forn_processado)
+
+                    total_carrinho = Decimal("0.00")
+                    itens_nao_encontrados = 0
+                    itens_detalhados = []
+
+                    for _, linha_cliente in df_cliente.iterrows():
+                        item_original = str(linha_cliente[col_item_cliente]).strip()
+                        item_match = linha_cliente["ITEM_MATCH"]
+                        qtd_cliente = Decimal(str(round(float(linha_cliente["Quantidade"]), 4)))
+
+                        candidatos_idx = set()
+                        palavras_item = [p for p in item_match.split() if p not in STOPWORDS_MATCH and len(p) > 2]
+
+                        if palavras_item:
+                            candidatos_idx.update(indice_fornecedor.get(f"PRIMEIRA_{palavras_item[0]}", []))
+                            for palavra in palavras_item:
+                                candidatos_idx.update(indice_fornecedor.get(palavra, []))
+
+                        if not candidatos_idx:
+                            candidatos_idx = range(len(df_forn_processado))
+
+                        candidatos = []
+                        for idx in candidatos_idx:
+                            linha_forn = df_forn_processado.iloc[idx]
+                            if verificar_blacklist(item_original, linha_forn["Descrição Limpa"]): continue
+                            
+                            chave = (item_match, linha_forn["Descrição Match"])
+                            if chave in cache_scores:
+                                score = cache_scores[chave]
+                            else:
+                                score = calcular_score_composto(item_match, linha_forn["Descrição Match"], item_original, linha_forn["Descrição Limpa"])
+                                cache_scores[chave] = score
+                            
+                            if score >= SCORE_MINIMO:
+                                candidatos.append({"linha": linha_forn, "score": score, "preco_base": linha_forn["Preço Total Base"]})
+
+                        if candidatos:
+                            candidatos = sorted(candidatos, key=lambda x: (-x["score"], x["preco_base"]))
+                            escolhido = candidatos[0]
+                            
+                            qtd_fornecedor = Decimal(str(escolhido["linha"]["Quantidade Fornecedor"]))
+                            ipi = Decimal(str(escolhido["linha"]["IPI"]))
+                            preco_total_base = Decimal(str(escolhido["linha"]["Preço Total Base"]))
+                            preco_unitario = Decimal(str(escolhido["linha"]["Preço Unitário"]))
+
+                            subtotal_com_ipi = preco_total_base * (Decimal("1") + (ipi / Decimal("100")))
+                            subtotal_com_ipi = subtotal_com_ipi.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+                            total_carrinho += subtotal_com_ipi
+
+                            itens_detalhados.append({
+                                "Item Desejado": item_original,
+                                "Produto Encontrado": escolhido["linha"]["Descrição Limpa"],
+                                "Compatibilidade": f"{escolhido['score']:.0f}%",
+                                "Qtd": float(qtd_fornecedor),
+                                "Preço Unitário": formatar_brl(preco_unitario),
+                                "Total s/ IPI": formatar_brl(preco_total_base),
+                                "IPI": f"{ipi}%",
+                                "Total c/ IPI": formatar_brl(subtotal_com_ipi)
+                            })
                         else:
-                            diferenca = row['Total'] - melhor_total
-                            st.metric(label=row["Fornecedor"], value=formatar_brl(row["Total"]), delta=f"{'+' if diferenca >= 0 else ''}{formatar_brl(diferenca)}", delta_color="inverse")
+                            itens_nao_encontrados += 1
+                            itens_detalhados.append({
+                                "Item Desejado": item_original,
+                                "Produto Encontrado": "❌ NÃO ENCONTRADO",
+                                "Compatibilidade": "0%",
+                                "Qtd": float(qtd_cliente),
+                                "Preço Unitário": "R$ 0,00",
+                                "Total s/ IPI": "R$ 0,00",
+                                "IPI": "0%",
+                                "Total c/ IPI": "R$ 0,00"
+                            })
 
-                # ✨ LÓGICA DO ALERTA DE COMPRA FRACIONADA ✨
-                alertas_fracionados = []
-                for i, row in df_resultados.iterrows():
-                    if i > 0 and row["Total"] < melhor_total:
-                        economia = melhor_total - row["Total"]
-                        alertas_fracionados.append(
-                            f"**{row['Fornecedor']}** está **{formatar_brl(economia)} mais barato**, mas deixou de cotar **{row['Itens Faltando']} item(ns)**."
-                        )
-                
-                if alertas_fracionados:
-                    st.warning("⚠️ **Alerta de Oportunidade (Possível Compra Fracionada):**")
-                    for alerta in alertas_fracionados:
-                        st.write(f"- {alerta}")
-                    st.info("💡 *A plataforma deu a vitória para a empresa com a lista mais completa, mas avalie se não vale a pena fazer uma compra separada!*")
+                    resultados_finais.append({"Fornecedor": nome_fornecedor, "Total": total_carrinho, "Itens Faltando": itens_nao_encontrados})
+                    detalhes_fornecedores[nome_fornecedor] = pd.DataFrame(itens_detalhados)
 
-                st.write("---")
-                st.markdown("## 🔍 Auditoria Inteligente")
-                fornecedor_select = st.selectbox("Escolha a empresa para auditar:", df_resultados["Fornecedor"].tolist())
-                df_auditoria = detalhes_fornecedores[fornecedor_select]
-                st.dataframe(df_auditoria, use_container_width=True)
+                if resultados_finais:
+                    df_resultados = pd.DataFrame(resultados_finais)
+                    df_resultados["Total_Ordenacao"] = df_resultados["Total"].apply(lambda x: float(x))
+                    df_resultados = df_resultados.sort_values(by=["Itens Faltando", "Total_Ordenacao"]).reset_index(drop=True)
 
-                st.write("---")
-                st.markdown("## 📄 Exportação de Relatórios PDF")
-                fornecedor_pdf = st.selectbox("Escolha o fornecedor para gerar PDF:", df_resultados["Fornecedor"].tolist(), key="pdf_select")
-                linha_pdf = df_resultados[df_resultados["Fornecedor"] == fornecedor_pdf].iloc[0]
-                pdf_bytes = gerar_pdf_relatorio(fornecedor_pdf, linha_pdf["Total"], linha_pdf["Itens Faltando"], detalhes_fornecedores[fornecedor_pdf])
+                    st.markdown("## 🏆 Resultado da Cotação")
+                    cols = st.columns(min(len(df_resultados), 4))
+                    melhor_fornecedor = df_resultados.iloc[0]
+                    melhor_total = melhor_fornecedor["Total"]
+                    
+                    for i, row in df_resultados.head(4).iterrows():
+                        with cols[i]:
+                            if i == 0:
+                                st.metric(label=f"🥇 {row['Fornecedor']}", value=formatar_brl(row["Total"]), delta=f"{row['Itens Faltando']} itens faltando")
+                            else:
+                                diferenca = row['Total'] - melhor_total
+                                st.metric(label=row["Fornecedor"], value=formatar_brl(row["Total"]), delta=f"{'+' if diferenca >= 0 else ''}{formatar_brl(diferenca)}", delta_color="inverse")
 
-                st.download_button(label="📥 Baixar Relatório PDF", data=pdf_bytes, file_name=f"relatorio_{fornecedor_pdf}.pdf", mime="application/pdf")
+                    alertas_fracionados = []
+                    for i, row in df_resultados.iterrows():
+                        if i > 0 and row["Total"] < melhor_total:
+                            economia = melhor_total - row["Total"]
+                            alertas_fracionados.append(
+                                f"**{row['Fornecedor']}** está **{formatar_brl(economia)} mais barato**, mas deixou de cotar **{row['Itens Faltando']} item(ns)**."
+                            )
+                    
+                    if alertas_fracionados:
+                        st.warning("⚠️ **Alerta de Oportunidade (Possível Compra Fracionada):**")
+                        for alerta in alertas_fracionados:
+                            st.write(f"- {alerta}")
+                        st.info("💡 *A plataforma deu a vitória para a empresa com a lista mais completa, mas avalie se não vale a pena fazer uma compra separada!*")
 
-    except Exception as e:
-        st.error(f"Erro ao processar: {str(e)}")
-        if DEBUG_MODE: st.exception(e)
+                    st.write("---")
+                    st.markdown("## 🔍 Auditoria Inteligente")
+                    fornecedor_select = st.selectbox("Escolha a empresa para auditar:", df_resultados["Fornecedor"].tolist())
+                    df_auditoria = detalhes_fornecedores[fornecedor_select]
+                    st.dataframe(df_auditoria, use_container_width=True)
+
+                    st.write("---")
+                    st.markdown("## 📄 Exportação de Relatórios PDF")
+                    fornecedor_pdf = st.selectbox("Escolha o fornecedor para gerar PDF:", df_resultados["Fornecedor"].tolist(), key="pdf_select")
+                    linha_pdf = df_resultados[df_resultados["Fornecedor"] == fornecedor_pdf].iloc[0]
+                    pdf_bytes = gerar_pdf_relatorio(fornecedor_pdf, linha_pdf["Total"], linha_pdf["Itens Faltando"], detalhes_fornecedores[fornecedor_pdf])
+
+                    st.download_button(label="📥 Baixar Relatório PDF", data=pdf_bytes, file_name=f"relatorio_{fornecedor_pdf}.pdf", mime="application/pdf")
+
+        except Exception as e:
+            st.error(f"Erro ao processar: {str(e)}")
+            if DEBUG_MODE: st.exception(e)
 else:
-    st.info("💡 Faça upload da lista de desejos e dos fornecedores (PDF, Excel, CSV ou TXT).")
+    st.info("💡 Faça upload da lista de desejos e dos fornecedores. Depois clique em 'GerAR COTAÇÃO'.")
