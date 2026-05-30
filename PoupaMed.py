@@ -185,15 +185,23 @@ def formatar_brl(valor):
     return f"R$ {valor_str}"
 
 def converter_decimal_seguro(valor, default="0"):
+    """Limpa letras e símbolos antes de converter para número decimal"""
     try:
-        valor = str(valor).strip()
+        valor = str(valor).strip().upper()
+        
+        # Remove TUDO que não seja número, vírgula ou ponto (ex: "40,00 UND" vira "40,00")
+        valor_limpo = re.sub(r'[^0-9,\.]', '', valor)
+        
+        if not valor_limpo:
+            return Decimal(default)
 
-        if "." in valor and "," in valor:
-            valor = valor.replace(".", "").replace(",", ".")
-        elif "," in valor:
-            valor = valor.replace(",", ".")
+        # Ajusta as casas decimais para o padrão do Python
+        if "." in valor_limpo and "," in valor_limpo:
+            valor_limpo = valor_limpo.replace(".", "").replace(",", ".")
+        elif "," in valor_limpo:
+            valor_limpo = valor_limpo.replace(",", ".")
 
-        return Decimal(valor)
+        return Decimal(valor_limpo)
 
     except:
         return Decimal(default)
