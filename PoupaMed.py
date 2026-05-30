@@ -1,5 +1,5 @@
 # =========================================================
-# V18.3 - REFATORAÇÃO: USO DO PREÇO TOTAL NATIVO DA PLANILHA
+# V18.4 - ENGINE DE AUDITORIA COM ENGENHARIA REVERSA DE QTD
 # =========================================================
 
 import streamlit as st
@@ -26,7 +26,7 @@ from datetime import datetime
 # =========================================================
 
 st.set_page_config(page_title="PoupaMed", layout="wide", page_icon="🩺")
-st.success("✨ ENGINE V18.3 - OTIMIZAÇÃO DE EXTRATO ✨")
+st.success("✨ ENGINE V18.4 - ENGENHARIA REVERSA ✨")
 
 SCORE_MINIMO = 72
 DEBUG_MODE = True
@@ -156,7 +156,6 @@ def formatar_brl(valor):
     return f"R$ {valor_str}"
 
 def converter_decimal_seguro(valor, default="0"):
-    """Limpa letras e símbolos antes de converter para número decimal"""
     try:
         valor = str(valor).strip().upper()
         valor_limpo = re.sub(r'[^0-9,\.]', '', valor)
@@ -265,7 +264,7 @@ def calcular_score_composto(item_cliente, item_fornecedor, texto_cliente, texto_
     return max(0, min(score_final, 100))
 
 # =========================================================
-# MOTORES DE EXTRAÇÃO
+# MOTORES DE EXTRAÇÃO E LIMPEZA
 # =========================================================
 
 @st.cache_data
@@ -332,14 +331,12 @@ def identificar_colunas_inteligente(df, nome_arquivo):
         if any(p in col_lower for p in ["descri", "produto", "item", "material"]):
             col_desc = col
         if any(p in col_lower for p in ["preço", "preco", "valor", "unit"]):
-            # Garante que não confunda "preço unitário" com "preço total"
             if "total" not in col_lower: 
                 col_preco = col
         if any(p in col_lower for p in ["qtd", "quantidade"]):
             col_qtd = col
         if "ipi" in col_lower:
             col_ipi = col
-        # Identifica a coluna que JÁ TEM a multiplicação
         if any(p in col_lower for p in ["preco total", "preço total", "valor total", "total"]):
             col_total = col
 
@@ -358,7 +355,7 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
     novas_descricoes = []
     novos_precos = []
     novas_qtds = []
-    novos_ipis = [] # <-- Declarado com 'o'
+    novos_ipis = [] 
     novos_totais_base = [] 
 
     for _, row in df.iterrows():
@@ -398,6 +395,12 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
             preco_total_arquivo = converter_preco(row[col_total_nome])
             if preco_total_arquivo:
                 preco_total_base = preco_total_arquivo
+                
+                # ✨ ENGENHARIA REVERSA DA QUANTIDADE ✨
+                # Se achamos o Total e temos o Preço Unitário, dividimos um pelo outro.
+                if preco_unit > Decimal("0"):
+                    qtd_reversa = (preco_total_base / preco_unit).quantize(Decimal("0.00"), rounding=ROUND_HALF_UP).normalize()
+                    quantidade = qtd_reversa
         
         if preco_total_base is None:
             preco_total_base = preco_unit * quantidade
@@ -405,7 +408,7 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
         novas_descricoes.append(texto_desc)
         novos_precos.append(preco_unit)
         novas_qtds.append(quantidade)
-        novos_ipis.append(ipi) # ✅ CORRIGIDO AQUI PARA "novos_ipis" com 'o'
+        novas_ipis.append(ipi) 
         novos_totais_base.append(preco_total_base)
 
     df_resultado = pd.DataFrame({
@@ -561,7 +564,7 @@ if arquivo_cliente and arquivos_fornecedores:
                 df_forn = df_forn.loc[:, ~df_forn.columns.duplicated()].copy()
 
                 colunas = identificar_colunas_inteligente(df_forn, nome_fornecedor)
-                if not colunas[0]: continue # Sem coluna de descrição
+                if not colunas[0]: continue 
 
                 df_forn_processado = limpar_tabela_hibrida(df_forn, *colunas, nome_fornecedor)
                 if len(df_forn_processado) == 0: continue
@@ -609,11 +612,8 @@ if arquivo_cliente and arquivos_fornecedores:
                         
                         qtd_fornecedor = Decimal(str(escolhido["linha"]["Quantidade Fornecedor"]))
                         ipi = Decimal(str(escolhido["linha"]["IPI"]))
-                        
-                        # ✅ USA DIRETAMENTE O PREÇO TOTAL DA PLANILHA (SE NÃO TIVER, JÁ VEIO CALCULADO DO FALLBACK)
                         preco_total_base = Decimal(str(escolhido["linha"]["Preço Total Base"]))
 
-                        # APLICA O IPI EM CIMA DO PREÇO TOTAL DA PLANILHA
                         subtotal_com_ipi = preco_total_base * (Decimal("1") + (ipi / Decimal("100")))
                         subtotal_com_ipi = subtotal_com_ipi.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
