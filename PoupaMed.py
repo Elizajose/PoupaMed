@@ -1,5 +1,5 @@
 # =========================================================
-# V19.2 - ENGINE DE AUDITORIA: RECONCILIAÇÃO MATEMÁTICA EXTREMA
+# V19.3 - ENGINE DE AUDITORIA: CORREÇÃO DE UI (SLIDER E UPLOAD)
 # =========================================================
 
 import streamlit as st
@@ -26,10 +26,10 @@ from datetime import datetime
 # =========================================================
 
 st.set_page_config(page_title="PoupaMed", layout="wide", page_icon="🩺")
-st.success("✨ ENGINE V19.2 - RECONCILIAÇÃO EXTREMA ✨")
+st.success("✨ ENGINE V19.3 - INTERFACE FLUIDA ✨")
 
-SCORE_MINIMO = 72
-DEBUG_MODE = True
+# As globais agora são controladas diretamente pelos widgets na barra lateral
+# (Removidas as definições estáticas daqui do topo para evitar conflitos)
 
 # =========================================================
 # CONFIGURAÇÕES DE EMBALAGEM E BLACKLIST
@@ -395,13 +395,11 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
         preco_total_base = None
         match_reconciliacao = False
 
-        # ✨ RECONCILIAÇÃO MATEMÁTICA EXTREMA (BALA DE PRATA) ✨
-        # Converte a linha toda pra texto e remove espaços no meio dos milhares
+        # ✨ RECONCILIAÇÃO MATEMÁTICA EXTREMA ✨
         linha_completa = " ".join(row.astype(str)).replace("nan", "").replace("None", "")
         linha_limpa_numeros = re.sub(r'(\d)\s+([.,]?\d)', r'\1\2', linha_completa)
         linha_limpa_numeros = re.sub(r'(\d)\s+([.,]?\d)', r'\1\2', linha_limpa_numeros) 
         
-        # Pega todos os valores monetários que sobraram na linha
         valores_monetarios = re.findall(r'\b\d{1,}(?:[.,]\d{3})*(?:[.,]\d{2,6})?\b', linha_limpa_numeros)
         
         valores_decimais = []
@@ -415,14 +413,12 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
                 divisao = val / preco_unit
                 div_round = divisao.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
                 
-                # Se a matemática bater redondinha, ele descobre a QTD e o TOTAL absolutos
                 if div_round > 0 and abs(divisao - div_round) < Decimal("0.05") and val >= preco_unit:
                     quantidade = div_round
                     preco_total_base = val
                     match_reconciliacao = True
                     break
 
-        # Fallback caso a reconciliação não ache nada (se o PDF for super bizarro)
         if not match_reconciliacao:
             if col_total_nome:
                 preco_total_arquivo = converter_preco(str(row[col_total_nome]).replace(" ", ""))
@@ -522,7 +518,7 @@ def gerar_pdf_relatorio(nome_fornecedor, total, itens_faltando, df_detalhes):
     return pdf
 
 # =========================================================
-# INTERFACE PRINCIPAL
+# INTERFACE PRINCIPAL E SIDEBAR
 # =========================================================
 
 st.sidebar.header("📋 Passo 1")
@@ -533,15 +529,9 @@ arquivos_fornecedores = st.sidebar.file_uploader("Planilhas e PDFs dos Fornecedo
                                                  type=['xlsx', 'csv', 'txt', 'pdf'], 
                                                  accept_multiple_files=True, key="fornecedores")
 
-debug_check = st.sidebar.checkbox("🔧 Modo Debug (mostrar logs)", value=DEBUG_MODE)
-if debug_check != DEBUG_MODE:
-    DEBUG_MODE = debug_check
-    st.rerun()
-
-score_ajuste = st.sidebar.slider("🎯 Score mínimo para match", 20, 100, SCORE_MINIMO, 5)
-if score_ajuste != SCORE_MINIMO:
-    SCORE_MINIMO = score_ajuste
-    st.rerun()
+# ✅ SOLUÇÃO DO BUG DA INTERFACE AQUI
+DEBUG_MODE = st.sidebar.checkbox("🔧 Modo Debug (mostrar logs)", value=True)
+SCORE_MINIMO = st.sidebar.slider("🎯 Score mínimo para match", 20, 100, 72, 5)
 
 if arquivo_cliente and arquivos_fornecedores:
     if st.sidebar.button("🚀 GERAR COTAÇÃO", use_container_width=True, type="primary"):
