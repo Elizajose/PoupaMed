@@ -1,5 +1,5 @@
 # =========================================================
-# V18.4 - ENGINE DE AUDITORIA COM ENGENHARIA REVERSA DE QTD
+# V18.5 - ENGINE DE AUDITORIA COM ENGENHARIA REVERSA DE QTD (CORRIGIDO)
 # =========================================================
 
 import streamlit as st
@@ -26,7 +26,7 @@ from datetime import datetime
 # =========================================================
 
 st.set_page_config(page_title="PoupaMed", layout="wide", page_icon="🩺")
-st.success("✨ ENGINE V18.4 - ENGENHARIA REVERSA ✨")
+st.success("✨ ENGINE V18.5 - ENGENHARIA REVERSA ✨")
 
 SCORE_MINIMO = 72
 DEBUG_MODE = True
@@ -355,7 +355,7 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
     novas_descricoes = []
     novos_precos = []
     novas_qtds = []
-    novos_ipis = [] 
+    novos_ipis = [] # ✅ CORRIGIDO: COM 'O'
     novos_totais_base = [] 
 
     for _, row in df.iterrows():
@@ -408,7 +408,7 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
         novas_descricoes.append(texto_desc)
         novos_precos.append(preco_unit)
         novas_qtds.append(quantidade)
-        novas_ipis.append(ipi) 
+        novos_ipis.append(ipi) # ✅ CORRIGIDO: COM 'O'
         novos_totais_base.append(preco_total_base)
 
     df_resultado = pd.DataFrame({
