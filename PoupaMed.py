@@ -1,5 +1,5 @@
 # =========================================================
-# V18.5 - ENGINE DE AUDITORIA COM ENGENHARIA REVERSA DE QTD (CORRIGIDO)
+# V18.6 - ENGINE DE AUDITORIA: NOMENCLATURAS E COLUNAS CLARAS
 # =========================================================
 
 import streamlit as st
@@ -26,7 +26,7 @@ from datetime import datetime
 # =========================================================
 
 st.set_page_config(page_title="PoupaMed", layout="wide", page_icon="🩺")
-st.success("✨ ENGINE V18.5 - ENGENHARIA REVERSA ✨")
+st.success("✨ ENGINE V18.6 - AUDITORIA TRANSPARENTE ✨")
 
 SCORE_MINIMO = 72
 DEBUG_MODE = True
@@ -355,7 +355,7 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
     novas_descricoes = []
     novos_precos = []
     novas_qtds = []
-    novos_ipis = [] # ✅ CORRIGIDO: COM 'O'
+    novos_ipis = [] 
     novos_totais_base = [] 
 
     for _, row in df.iterrows():
@@ -396,8 +396,7 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
             if preco_total_arquivo:
                 preco_total_base = preco_total_arquivo
                 
-                # ✨ ENGENHARIA REVERSA DA QUANTIDADE ✨
-                # Se achamos o Total e temos o Preço Unitário, dividimos um pelo outro.
+                # ENGENHARIA REVERSA DA QUANTIDADE
                 if preco_unit > Decimal("0"):
                     qtd_reversa = (preco_total_base / preco_unit).quantize(Decimal("0.00"), rounding=ROUND_HALF_UP).normalize()
                     quantidade = qtd_reversa
@@ -408,7 +407,7 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
         novas_descricoes.append(texto_desc)
         novos_precos.append(preco_unit)
         novas_qtds.append(quantidade)
-        novos_ipis.append(ipi) # ✅ CORRIGIDO: COM 'O'
+        novas_ipis.append(ipi) 
         novos_totais_base.append(preco_total_base)
 
     df_resultado = pd.DataFrame({
@@ -456,13 +455,15 @@ def gerar_pdf_relatorio(nome_fornecedor, total, itens_faltando, df_detalhes):
     elementos.append(info)
     elementos.append(Spacer(1, 20))
 
-    dados_tabela = [["Item Desejado", "Produto Encontrado", "Compat.", "Qtd", "IPI", "Preço Base", "Subtotal c/ IPI"]]
+    # Tabela com as colunas renomeadas para máxima clareza
+    dados_tabela = [["Item Desejado", "Produto Encontrado", "Compat.", "Qtd", "Preço Unit.", "Total s/ IPI", "IPI", "Total c/ IPI"]]
     for _, row in df_detalhes.iterrows():
-        dados_tabela.append([str(row["Item Desejado"])[:30], str(row["Produto Encontrado"])[:30], 
-                            str(row["Compatibilidade"]), str(row["Qtd"]), str(row["IPI"]),
-                            str(row["Preço Total Base"]), str(row["Subtotal"])])
+        dados_tabela.append([str(row["Item Desejado"])[:25], str(row["Produto Encontrado"])[:25], 
+                            str(row["Compatibilidade"]), str(row["Qtd"]), 
+                            str(row["Preço Unitário"]), str(row["Total s/ IPI"]), 
+                            str(row["IPI"]), str(row["Total c/ IPI"])])
     
-    dados_tabela.append(["", "", "", "", "", "TOTAL GERAL", formatar_brl(total)])
+    dados_tabela.append(["", "", "", "", "", "", "TOTAL GERAL", formatar_brl(total)])
 
     tabela = Table(dados_tabela, repeatRows=1)
     ultima_linha = len(dados_tabela) - 1
@@ -613,20 +614,23 @@ if arquivo_cliente and arquivos_fornecedores:
                         qtd_fornecedor = Decimal(str(escolhido["linha"]["Quantidade Fornecedor"]))
                         ipi = Decimal(str(escolhido["linha"]["IPI"]))
                         preco_total_base = Decimal(str(escolhido["linha"]["Preço Total Base"]))
+                        preco_unitario = Decimal(str(escolhido["linha"]["Preço Unitário"]))
 
                         subtotal_com_ipi = preco_total_base * (Decimal("1") + (ipi / Decimal("100")))
                         subtotal_com_ipi = subtotal_com_ipi.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
                         total_carrinho += subtotal_com_ipi
 
+                        # Dicionário com nomenclaturas transparentes
                         itens_detalhados.append({
                             "Item Desejado": item_original,
                             "Produto Encontrado": escolhido["linha"]["Descrição Limpa"],
                             "Compatibilidade": f"{escolhido['score']:.0f}%",
                             "Qtd": float(qtd_fornecedor),
-                            "Preço Total Base": formatar_brl(preco_total_base),
+                            "Preço Unitário": formatar_brl(preco_unitario),
+                            "Total s/ IPI": formatar_brl(preco_total_base),
                             "IPI": f"{ipi}%",
-                            "Subtotal": formatar_brl(subtotal_com_ipi)
+                            "Total c/ IPI": formatar_brl(subtotal_com_ipi)
                         })
                     else:
                         itens_nao_encontrados += 1
@@ -635,9 +639,10 @@ if arquivo_cliente and arquivos_fornecedores:
                             "Produto Encontrado": "❌ NÃO ENCONTRADO",
                             "Compatibilidade": "0%",
                             "Qtd": float(qtd_cliente),
-                            "Preço Total Base": "R$ 0,00",
+                            "Preço Unitário": "R$ 0,00",
+                            "Total s/ IPI": "R$ 0,00",
                             "IPI": "0%",
-                            "Subtotal": "R$ 0,00"
+                            "Total c/ IPI": "R$ 0,00"
                         })
 
                 resultados_finais.append({"Fornecedor": nome_fornecedor, "Total": total_carrinho, "Itens Faltando": itens_nao_encontrados})
