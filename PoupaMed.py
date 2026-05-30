@@ -1,5 +1,5 @@
 # =========================================================
-# V19.1 - ENGINE DE AUDITORIA: RECONCILIAÇÃO MATEMÁTICA DE PDF
+# V19.2 - ENGINE DE AUDITORIA: RECONCILIAÇÃO MATEMÁTICA EXTREMA
 # =========================================================
 
 import streamlit as st
@@ -26,7 +26,7 @@ from datetime import datetime
 # =========================================================
 
 st.set_page_config(page_title="PoupaMed", layout="wide", page_icon="🩺")
-st.success("✨ ENGINE V19.1 - RECONCILIAÇÃO MATEMÁTICA ✨")
+st.success("✨ ENGINE V19.2 - RECONCILIAÇÃO EXTREMA ✨")
 
 SCORE_MINIMO = 72
 DEBUG_MODE = True
@@ -393,26 +393,47 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
             ipi = extrair_ipi_texto(texto_desc)
 
         preco_total_base = None
-        if col_total_nome:
-            preco_total_arquivo = converter_preco(str(row[col_total_nome]).replace(" ", ""))
-            if preco_total_arquivo:
-                # ✨ RECONCILIAÇÃO MATEMÁTICA ✨
-                # Se faltou quantidade, tenta achar via engenharia reversa
-                if quantidade == Decimal("1") and preco_total_arquivo > preco_unit * Decimal("1.1"):
-                    if preco_unit > Decimal("0"):
-                        quantidade = (preco_total_arquivo / preco_unit).quantize(Decimal("0.00"), rounding=ROUND_HALF_UP).normalize()
-                        preco_total_base = preco_total_arquivo
-                else:
-                    # Se já temos a quantidade, vamos ver se o PDF quebrou o número do Total
-                    calculado = preco_unit * quantidade
-                    # Se o PDF extraiu 735.86 mas a conta dá 3735.86, joga o erro do PDF fora e usa o calculado
-                    if abs(preco_total_arquivo - calculado) > Decimal("2.00"):
-                        preco_total_base = calculado
-                    else:
-                        preco_total_base = preco_total_arquivo
+        match_reconciliacao = False
+
+        # ✨ RECONCILIAÇÃO MATEMÁTICA EXTREMA (BALA DE PRATA) ✨
+        # Converte a linha toda pra texto e remove espaços no meio dos milhares
+        linha_completa = " ".join(row.astype(str)).replace("nan", "").replace("None", "")
+        linha_limpa_numeros = re.sub(r'(\d)\s+([.,]?\d)', r'\1\2', linha_completa)
+        linha_limpa_numeros = re.sub(r'(\d)\s+([.,]?\d)', r'\1\2', linha_limpa_numeros) 
         
-        if preco_total_base is None:
-            preco_total_base = preco_unit * quantidade
+        # Pega todos os valores monetários que sobraram na linha
+        valores_monetarios = re.findall(r'\b\d{1,}(?:[.,]\d{3})*(?:[.,]\d{2,6})?\b', linha_limpa_numeros)
+        
+        valores_decimais = []
+        for v in valores_monetarios:
+            v_dec = converter_preco(v)
+            if v_dec and v_dec > 0:
+                valores_decimais.append(v_dec)
+                
+        if preco_unit and preco_unit > Decimal("0"):
+            for val in reversed(valores_decimais):
+                divisao = val / preco_unit
+                div_round = divisao.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+                
+                # Se a matemática bater redondinha, ele descobre a QTD e o TOTAL absolutos
+                if div_round > 0 and abs(divisao - div_round) < Decimal("0.05") and val >= preco_unit:
+                    quantidade = div_round
+                    preco_total_base = val
+                    match_reconciliacao = True
+                    break
+
+        # Fallback caso a reconciliação não ache nada (se o PDF for super bizarro)
+        if not match_reconciliacao:
+            if col_total_nome:
+                preco_total_arquivo = converter_preco(str(row[col_total_nome]).replace(" ", ""))
+                if preco_total_arquivo:
+                    preco_total_base = preco_total_arquivo
+                    if preco_unit > Decimal("0"):
+                        qtd_reversa = (preco_total_base / preco_unit).quantize(Decimal("0.00"), rounding=ROUND_HALF_UP).normalize()
+                        quantidade = qtd_reversa
+            
+            if preco_total_base is None:
+                preco_total_base = preco_unit * quantidade
 
         novas_descricoes.append(texto_desc)
         novos_precos.append(preco_unit)
