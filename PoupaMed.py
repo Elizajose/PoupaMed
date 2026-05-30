@@ -1,5 +1,5 @@
 # =========================================================
-# V19.0 - ENGINE DE AUDITORIA: BOTÃO, NOMES COMPLETOS E MATH FIX
+# V19.1 - ENGINE DE AUDITORIA: RECONCILIAÇÃO MATEMÁTICA DE PDF
 # =========================================================
 
 import streamlit as st
@@ -26,7 +26,7 @@ from datetime import datetime
 # =========================================================
 
 st.set_page_config(page_title="PoupaMed", layout="wide", page_icon="🩺")
-st.success("✨ ENGINE V19.0 - COTAÇÃO SOB DEMANDA ✨")
+st.success("✨ ENGINE V19.1 - RECONCILIAÇÃO MATEMÁTICA ✨")
 
 SCORE_MINIMO = 72
 DEBUG_MODE = True
@@ -131,7 +131,6 @@ def converter_preco(valor):
     valor = str(valor).strip()
     if valor in ["", "nan", "None", "NaN"]: return None
     
-    # Remove espaços que quebram os milhares (ex: "3 735,86" vira "3735,86")
     valor = valor.replace("R$", "").replace(" ", "")
     
     try:
@@ -363,7 +362,7 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
         if not texto_desc or texto_desc.lower() in ["nan", "none", ""]: continue
 
         valor_preco = str(row[col_preco_nome]).strip() if col_preco_nome else ""
-        valor_preco = valor_preco.replace(" ", "") # BLINDAGEM DE ESPAÇOS EM NÚMEROS
+        valor_preco = valor_preco.replace(" ", "") 
         
         multiplos_precos = re.findall(r'\d{1,}(?:[.,]\d{3})*(?:[.,]\d+)?', valor_preco)
         if len(multiplos_precos) >= 2: valor_preco = multiplos_precos[0]
@@ -397,11 +396,20 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
         if col_total_nome:
             preco_total_arquivo = converter_preco(str(row[col_total_nome]).replace(" ", ""))
             if preco_total_arquivo:
-                preco_total_base = preco_total_arquivo
-                
-                if preco_unit > Decimal("0"):
-                    qtd_reversa = (preco_total_base / preco_unit).quantize(Decimal("0.00"), rounding=ROUND_HALF_UP).normalize()
-                    quantidade = qtd_reversa
+                # ✨ RECONCILIAÇÃO MATEMÁTICA ✨
+                # Se faltou quantidade, tenta achar via engenharia reversa
+                if quantidade == Decimal("1") and preco_total_arquivo > preco_unit * Decimal("1.1"):
+                    if preco_unit > Decimal("0"):
+                        quantidade = (preco_total_arquivo / preco_unit).quantize(Decimal("0.00"), rounding=ROUND_HALF_UP).normalize()
+                        preco_total_base = preco_total_arquivo
+                else:
+                    # Se já temos a quantidade, vamos ver se o PDF quebrou o número do Total
+                    calculado = preco_unit * quantidade
+                    # Se o PDF extraiu 735.86 mas a conta dá 3735.86, joga o erro do PDF fora e usa o calculado
+                    if abs(preco_total_arquivo - calculado) > Decimal("2.00"):
+                        preco_total_base = calculado
+                    else:
+                        preco_total_base = preco_total_arquivo
         
         if preco_total_base is None:
             preco_total_base = preco_unit * quantidade
@@ -445,7 +453,7 @@ def gerar_pdf_relatorio(nome_fornecedor, total, itens_faltando, df_detalhes):
     
     styles = getSampleStyleSheet()
     style_normal = styles['BodyText']
-    style_normal.fontSize = 8 # Letra menor para caber nomes completos
+    style_normal.fontSize = 8
 
     elementos.append(Paragraph("<b>RELATÓRIO DE COTAÇÃO HOSPITALAR</b>", styles['Title']))
     elementos.append(Spacer(1, 12))
@@ -462,7 +470,6 @@ def gerar_pdf_relatorio(nome_fornecedor, total, itens_faltando, df_detalhes):
 
     dados_tabela = [["Item Desejado", "Produto Encontrado", "Compat.", "Qtd", "Preço Unit.", "Total s/ IPI", "IPI", "Total c/ IPI"]]
     for _, row in df_detalhes.iterrows():
-        # Uso do Paragraph garante que nomes grandes sejam empurrados para a linha de baixo, sem cortar.
         item_desejado = Paragraph(str(row["Item Desejado"]), style_normal)
         produto_encontrado = Paragraph(str(row["Produto Encontrado"]), style_normal)
         
@@ -473,7 +480,6 @@ def gerar_pdf_relatorio(nome_fornecedor, total, itens_faltando, df_detalhes):
     
     dados_tabela.append(["", "", "", "", "", "", "TOTAL GERAL", formatar_brl(total)])
 
-    # Ajuste nas larguras das colunas para os textos longos respirarem
     tabela = Table(dados_tabela, repeatRows=1, colWidths=[110, 110, 45, 35, 55, 60, 30, 65])
     ultima_linha = len(dados_tabela) - 1
     tabela.setStyle(TableStyle([
@@ -516,7 +522,6 @@ if score_ajuste != SCORE_MINIMO:
     SCORE_MINIMO = score_ajuste
     st.rerun()
 
-# 🚀 AQUI ENTRA O BOTÃO DE AÇÃO MANUAL
 if arquivo_cliente and arquivos_fornecedores:
     if st.sidebar.button("🚀 GERAR COTAÇÃO", use_container_width=True, type="primary"):
         try:
@@ -708,4 +713,4 @@ if arquivo_cliente and arquivos_fornecedores:
             st.error(f"Erro ao processar: {str(e)}")
             if DEBUG_MODE: st.exception(e)
 else:
-    st.info("💡 Faça upload da lista de desejos e dos fornecedores. Depois clique em 'GerAR COTAÇÃO'.")
+    st.info("💡 Faça upload da lista de desejos e dos fornecedores. Depois clique em '🚀 GERAR COTAÇÃO'.")
