@@ -1,5 +1,5 @@
 # =========================================================
-# V25.0 - ENGINE SEMÂNTICA: ALGORITMO DE EXTRAÇÃO EM ARRAY
+# V26.0 - ENGINE SEMÂNTICA: BLINDAGEM DE QUANTIDADE (USER FIX)
 # =========================================================
 
 import streamlit as st
@@ -26,7 +26,7 @@ from datetime import datetime
 # =========================================================
 
 st.set_page_config(page_title="PoupaMed", layout="wide", page_icon="🩺")
-st.success("✨ ENGINE V25.0 - EXTRAÇÃO DE PREÇOS EM ARRAY ✨")
+st.success("✨ ENGINE V26.0 - BLINDAGEM FINANCEIRA EXPLÍCITA ✨")
 
 DEBUG_MODE = True
 SCORE_MINIMO = 70 
@@ -89,7 +89,6 @@ def ler_lista_desejos_txt(arquivo_txt):
                 continue
             
             linha = re.sub(r'\s+', ' ', linha).strip()
-            # ASSUMINDO A LINHA INTEIRA COMO PRODUTO PARA NÃO PERDER MEDIDAS
             dados.append({"Produto": linha, "Quantidade": "1"})
         
         if not dados:
@@ -133,7 +132,6 @@ def extrair_medidas(texto):
 def normalizar_produto_medico(texto):
     texto = normalizar_texto_basico(texto)
     
-    # Remove lixo de embalagem antes de limpar a pontuação
     texto = re.sub(r'\bC/\s*\d+\b', '', texto)
     texto = re.sub(r'\b\d+\s*UND?\b', '', texto)
     texto = re.sub(r'\bCX\s*\d+\b', '', texto)
@@ -328,9 +326,20 @@ def extrair_tabela_pdf_local(arquivo_upload):
 
 def identificar_colunas_inteligente(df, nome_arquivo):
     col_desc = col_preco = col_qtd = col_ipi = col_total = None
-
-    for col in df.columns:
+    
+    # Mapeamento explícito baseado na sua regra
+    for i, col in enumerate(df.columns):
         col_lower = str(col).lower()
+        col_original = str(col)
+        
+        # REGRA EXPLÍCITA: Se a primeira coluna é "Item" ou "Código", a segunda é Quantidade
+        if i == 0 and any(p in col_lower for p in ["item", "código", "codigo", "cód", "cod"]):
+            if len(df.columns) > 1:
+                col_qtd = df.columns[1]  # FORÇA: segunda coluna é QUANTIDADE
+                if DEBUG_MODE:
+                    st.info(f"🎯 REGRA EXPLÍCITA: Coluna '{col_qtd}' identificada como QUANTIDADE (posição 2)")
+        
+        # Identificação normal
         if any(p in col_lower for p in ["descri", "produto", "item", "material"]):
             col_desc = col
         if not col_preco and any(p in col_lower for p in ["preço", "preco", "valor", "unit"]):
@@ -338,14 +347,20 @@ def identificar_colunas_inteligente(df, nome_arquivo):
                 col_preco = col
         if not col_qtd and any(p in col_lower for p in ["qtd", "qtde", "quantidade", "quant", "qde"]):
             col_qtd = col
+            if DEBUG_MODE:
+                st.info(f"🎯 Coluna '{col}' identificada como QUANTIDADE por nome")
         if "ipi" in col_lower:
             col_ipi = col
         if not col_total and any(p in col_lower for p in ["preco total", "preço total", "valor total", "total"]):
             col_total = col
 
-    if not col_qtd and len(df.columns) >= 3:
-        if "item" in str(df.columns[0]).lower() or "cód" in str(df.columns[0]).lower():
+    # FALLBACK INTELIGENTE: Se ainda não tem col_qtd, procura numérica após "Item"
+    if not col_qtd and len(df.columns) >= 2:
+        primeira_col = str(df.columns[0]).lower()
+        if any(p in primeira_col for p in ["item", "código", "codigo", "cód", "cod"]):
             col_qtd = df.columns[1]
+            if DEBUG_MODE:
+                st.info(f"🎯 FALLBACK: Coluna '{col_qtd}' definida como QUANTIDADE (após coluna de item)")
 
     if not col_desc:
         for col in df.columns:
@@ -354,7 +369,7 @@ def identificar_colunas_inteligente(df, nome_arquivo):
                 break
 
     if DEBUG_MODE:
-        st.info(f"📄 {nome_arquivo}: Desc={col_desc} | Preço={col_preco} | Qtd={col_qtd} | IPI={col_ipi} | Total Nativo={col_total}")
+        st.info(f"📄 {nome_arquivo}: Desc={col_desc} | Preço={col_preco} | Qtd={col_qtd} | IPI={col_ipi} | Total={col_total}")
 
     return col_desc, col_preco, col_qtd, col_ipi, col_total
 
@@ -365,74 +380,98 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
     novos_ipis = [] 
     novos_totais_base = [] 
 
-    for _, row in df.iterrows():
+    for idx, row in df.iterrows():
         texto_desc = str(row[col_desc_nome]).strip()
-        if not texto_desc or texto_desc.lower() in ["nan", "none", ""]: continue
+        if not texto_desc or texto_desc.lower() in ["nan", "none", ""]: 
+            continue
 
-        # 1. QUANTIDADE OFICIAL
+        # ========== EXTRAÇÃO DO PREÇO UNITÁRIO ==========
+        preco_unit = None
+        
+        # PRIORIDADE 1: Coluna de preço unitário explícita
+        if col_preco_nome and pd.notna(row[col_preco_nome]):
+            valor_preco_raw = str(row[col_preco_nome]).strip()
+            # Limpa apenas C/100, NÃO remove números da descrição
+            valor_preco_limpo = re.sub(r'\bC/\d+\b', '', valor_preco_raw, flags=re.IGNORECASE)
+            preco_unit = converter_preco(valor_preco_limpo)
+            
+        # PRIORIDADE 2: Extrair da última coluna de preço na linha (fallback)
+        if preco_unit is None and col_total_nome and pd.notna(row[col_total_nome]):
+            # Tenta extrair preço da coluna de total
+            total_val = converter_preco(str(row[col_total_nome]).strip())
+            if total_val and col_qtd_nome and pd.notna(row[col_qtd_nome]):
+                qtd_val = converter_decimal_seguro(str(row[col_qtd_nome]).strip(), default=None)
+                if qtd_val and qtd_val > 0:
+                    preco_unit = total_val / qtd_val
+
+        if preco_unit is None:
+            if DEBUG_MODE:
+                st.warning(f"⚠️ Linha {idx}: Não foi possível extrair preço unitário. Descrição: {texto_desc[:50]}...")
+            continue
+
+        # ========== EXTRAÇÃO DA QUANTIDADE (BLINDADA) ==========
         quantidade = Decimal("1")
-        qtd_oficial = False
+        qtd_encontrada_oficial = False
+        
+        # REGRA DE OURO: SÓ USA A COLUNA DE QUANTIDADE, NUNCA A DESCRIÇÃO
         if col_qtd_nome and pd.notna(row[col_qtd_nome]):
             qtd_raw = str(row[col_qtd_nome]).strip()
+            # Extrai APENAS o primeiro número encontrado (ex: "100,00" ou "100.00")
             qtd_match = re.search(r'^(\d+[.,]?\d*)', qtd_raw)
             if qtd_match:
-                qtd_val = converter_decimal_seguro(qtd_match.group(1), default=None)
-                if qtd_val and qtd_val > 0:
-                    quantidade = qtd_val
-                    qtd_oficial = True
+                qtd_teste = converter_decimal_seguro(qtd_match.group(1), default=None)
+                if qtd_teste is not None and qtd_teste > Decimal("0"):
+                    quantidade = qtd_teste
+                    qtd_encontrada_oficial = True
+                    if DEBUG_MODE:
+                        st.info(f"✅ Linha {idx}: Quantidade extraída da coluna oficial = {quantidade}")
 
-        # 2. EXTRAÇÃO DE PREÇOS (O NOVO MOTOR EM ARRAY QUE NÃO DELETA LINHAS)
-        linha_completa = " ".join(row.astype(str)).replace("nan", "").replace("None", "")
-        linha_completa = re.sub(r'\bC/\s*\d+\b', '', linha_completa, flags=re.IGNORECASE)
-        linha_completa = re.sub(r'\bCX\s*\d+\b', '', linha_completa, flags=re.IGNORECASE)
-        linha_completa = re.sub(r'(\d)\s+([.,]\d{2,})\b', r'\1\2', linha_completa) # Conserta o 3. 735,86
-        
-        numeros_encontrados = re.findall(r'\b\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,6})?\b', linha_completa)
-        valores_decimais = []
-        for num in numeros_encontrados:
-            val = converter_preco(num)
-            if val and val > 0:
-                valores_decimais.append(val)
+        # SE NÃO TEM COLUNA DE QUANTIDADE, USA A COLUNA DE TOTAL PARA CALCULAR
+        if not qtd_encontrada_oficial and col_total_nome and pd.notna(row[col_total_nome]):
+            total_val = converter_preco(str(row[col_total_nome]).strip())
+            if total_val and preco_unit > Decimal("0"):
+                quantidade = (total_val / preco_unit).quantize(Decimal("0.00"), rounding=ROUND_HALF_UP)
+                qtd_encontrada_oficial = True
+                if DEBUG_MODE:
+                    st.info(f"🔄 Linha {idx}: Quantidade calculada pelo total = {quantidade}")
 
-        preco_unit = None
-        preco_total_base = None
+        # ÚLTIMO RECURSO: Tenta extrair UND/CX da descrição (apenas se não tem coluna de quantidade)
+        if not qtd_encontrada_oficial:
+            # Procura padrões como "100 UND", "C/100", "CX 20"
+            match_und = re.search(r'(\d+)\s*(?:UND|UNIDADES?|UN)\b', texto_desc, re.IGNORECASE)
+            if match_und:
+                quantidade = Decimal(match_und.group(1))
+                qtd_encontrada_oficial = True
+            else:
+                match_cx = re.search(r'\bC/(\d+)\b', texto_desc, re.IGNORECASE)
+                if match_cx:
+                    quantidade = Decimal(match_cx.group(1))
+                    qtd_encontrada_oficial = True
+                else:
+                    match_pct = re.search(r'\bCX\s*(\d+)\b', texto_desc, re.IGNORECASE)
+                    if match_pct:
+                        quantidade = Decimal(match_pct.group(1))
+                        qtd_encontrada_oficial = True
 
-        if col_preco_nome and pd.notna(row[col_preco_nome]):
-            preco_teste = converter_preco(str(row[col_preco_nome]))
-            if preco_teste: preco_unit = preco_teste
-            
-        if col_total_nome and pd.notna(row[col_total_nome]):
-            total_teste = converter_preco(str(row[col_total_nome]))
-            if total_teste: preco_total_base = total_teste
-
-        if not preco_unit and len(valores_decimais) >= 2:
-            n1, n2 = valores_decimais[-2], valores_decimais[-1]
-            preco_unit = min(n1, n2)
-            if not preco_total_base:
-                preco_total_base = max(n1, n2)
-        elif not preco_unit and len(valores_decimais) == 1:
-            preco_unit = valores_decimais[-1]
-
-        if preco_unit is None: continue
-
-        # 3. RECONCILIAÇÃO MATEMÁTICA
-        if not qtd_oficial and preco_total_base and preco_unit > 0:
-            div = preco_total_base / preco_unit
-            if abs(div - div.quantize(Decimal("1"))) < Decimal("0.05"):
-                quantidade = div.quantize(Decimal("1"))
-
-        total_calculado = preco_unit * quantidade
-        if preco_total_base and abs(preco_total_base - total_calculado) <= Decimal("0.05"):
-            preco_total_base = preco_total_base 
-        else:
-            preco_total_base = total_calculado 
-
-        # IPI
+        # ========== IPI ==========
         ipi = Decimal("0")
         if col_ipi_nome and pd.notna(row[col_ipi_nome]):
-            ipi = converter_decimal_seguro(str(row[col_ipi_nome]), "0")
+            ipi = converter_decimal_seguro(row[col_ipi_nome], "0")
         else:
             ipi = extrair_ipi_texto(texto_desc)
+
+        # ========== TOTAL BASE ==========
+        preco_total_base = preco_unit * quantidade
+        
+        # Se tem total nativo, usa ele (mais confiável)
+        if col_total_nome and pd.notna(row[col_total_nome]):
+            total_nativo = converter_preco(str(row[col_total_nome]).strip())
+            if total_nativo:
+                # Verifica se o total nativo é consistente
+                if abs(total_nativo - preco_total_base) <= Decimal("0.10") * preco_total_base:
+                    preco_total_base = total_nativo
+                elif DEBUG_MODE:
+                    st.warning(f"⚠️ Linha {idx}: Inconsistência de total! Nativo={total_nativo}, Calculado={preco_total_base}")
 
         novas_descricoes.append(texto_desc)
         novos_precos.append(preco_unit)
