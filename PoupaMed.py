@@ -1,5 +1,5 @@
 # =========================================================
-# V23.0 - ENGINE SEMÂNTICA: AULA DE NLP E BLINDAGEM DE QTD
+# V24.0 - ENGINE SEMÂNTICA: FIM DO BUG DO TXT E MEDIDAS
 # =========================================================
 
 import streamlit as st
@@ -26,7 +26,7 @@ from datetime import datetime
 # =========================================================
 
 st.set_page_config(page_title="PoupaMed", layout="wide", page_icon="🩺")
-st.success("✨ ENGINE V23.0 - NLP E CÁLCULO BLINDADO ✨")
+st.success("✨ ENGINE V24.0 - FIX DO TXT E MATCH DE MEDIDAS ✨")
 
 DEBUG_MODE = True
 SCORE_MINIMO = 70 
@@ -73,6 +73,7 @@ STOPWORDS_CATEGORIA = {"TUBO", "VACUTUBE", "A", "VACUO", "PARA", "COM", "DE", "D
 # =========================================================
 
 def ler_lista_desejos_txt(arquivo_txt):
+    """Lê arquivo TXT assumindo que a linha inteira é o produto, sem tentar extrair quantidades que quebram as medidas"""
     try:
         conteudo = arquivo_txt.read()
         try:
@@ -88,18 +89,9 @@ def ler_lista_desejos_txt(arquivo_txt):
             if not linha or linha.startswith('#') or linha.startswith('//'):
                 continue
             
-            linha = re.sub(r'\s+', ' ', linha)
-            match = re.match(r'(.+?)\s*[\-;:|,.]{1,2}\s*(\d+)', linha)
-            
-            if not match:
-                match = re.match(r'(.+?)\s+(\d+)\s*$', linha)
-            
-            if not match:
-                dados.append({"Produto": linha, "Quantidade": "1"})
-            else:
-                produto = match.group(1).strip()
-                quantidade = match.group(2).strip()
-                dados.append({"Produto": produto, "Quantidade": quantidade})
+            linha = re.sub(r'\s+', ' ', linha).strip()
+            # FIM DO ASSASSINO DE MILILITROS: A linha inteira agora é mapeada como Produto!
+            dados.append({"Produto": linha, "Quantidade": "1"})
         
         if not dados:
             st.error("Nenhum item válido encontrado no arquivo TXT")
@@ -115,21 +107,21 @@ def ler_lista_desejos_txt(arquivo_txt):
 # FUNÇÕES DE NLP E EXTRAÇÃO DE ATRIBUTOS
 # =========================================================
 
-def normalizar_texto_basico(texto):
-    """Mantém a pontuação para as regex funcionarem corretamente"""
+def normalizar_texto(texto):
     texto = str(texto).upper().strip()
     texto = unicodedata.normalize('NFKD', texto)
-    return ''.join(c for c in texto if not unicodedata.combining(c))
+    texto = ''.join(c for c in texto if not unicodedata.combining(c))
+    texto = re.sub(r'[^A-Z0-9\s]', ' ', texto)
+    return re.sub(r'\s+', ' ', texto).strip()
 
 def remover_palavras_irrelevantes(texto):
     palavras_ruins = ["MARCA", "PREMIUM", "DESCARBOX", "COM", "SEM", "C/", "S/"]
     return " ".join([p for p in texto.split() if p not in palavras_ruins])
 
 def preparar_texto_match(texto):
-    # Usado apenas para a lista do cliente
-    texto_limpo = remover_palavras_irrelevantes(normalizar_texto_basico(texto))
-    texto_limpo = re.sub(r'[^A-Z0-9\s]', ' ', texto_limpo)
-    return re.sub(r'\s+', ' ', texto_limpo).strip()
+    texto_limpo = remover_palavras_irrelevantes(normalizar_texto(texto))
+    texto_limpo = re.sub(r'^\d+\s*', '', texto_limpo)
+    return texto_limpo
 
 def extrair_medidas(texto):
     encontradas = re.findall(r'\b\d+[\.,]?\d*\s*(?:ML|L|MG|G|KG|MM|CM)\b', texto)
@@ -137,50 +129,45 @@ def extrair_medidas(texto):
     for m in encontradas:
         m = m.replace(',', '.')
         m = re.sub(r'\s+', '', m) 
+        # Tira o zero inútil para dar match perfeito (ex: "4.0ML" vira "4ML")
+        m = re.sub(r'\.0+(ML|L|MG|G|KG|MM|CM)', r'\1', m)
         normalizadas.add(m)
     return normalizadas
 
 def normalizar_produto_medico(texto):
-    """A ORDEM IMPORTA: NLP Correto preservando pontuação para Regex"""
-    texto = normalizar_texto_basico(texto)
+    """Transforma texto livre em um dicionário de atributos (Grafo de Conhecimento)"""
+    texto = normalizar_texto(texto)
     
-    # 1. Limpeza de Embalagem (C/100, 100 UND) ANTES de remover pontuação
-    texto = re.sub(r'\bC/\s*\d+\b', '', texto)
+    # Remove lixo de caixa e pacote
+    texto = re.sub(r'\bC/\d+\b', '', texto)
     texto = re.sub(r'\b\d+\s*UND?\b', '', texto)
     texto = re.sub(r'\bCX\s*\d+\b', '', texto)
     texto = re.sub(r'\bEMB\s*C/\d+\b', '', texto)
     
-    # 2. Aplicação de Sinônimos
     for padrao, sub in SINONIMOS.items():
         texto = re.sub(padrao, sub, texto)
     texto = re.sub(r'\s+', ' ', texto).strip()
     
-    # 3. Extração e Remoção de Marca
     marca_encontrada = None
     for marca in MARCAS_CONHECIDAS:
         if re.search(rf'\b{marca}\b', texto):
             marca_encontrada = marca
             texto = re.sub(rf'\b{marca}\b', '', texto).strip()
             
-    # 4. Extração de Medidas
     medidas = extrair_medidas(texto)
     
-    # 5. Atributos Exclusivos (Mutex) - Busca mantendo pontuação
-    texto_sem_pontuacao = re.sub(r'[^A-Z0-9\s]', ' ', texto)
     atributos = set()
     for grupo in ATRIBUTOS_MUTEX:
         for attr in grupo:
-            if re.search(rf'\b{attr}\b', texto_sem_pontuacao):
+            if re.search(rf'\b{attr}\b', texto):
                 atributos.add(attr)
 
-    # 6. Limpeza final para texto livre
-    texto_limpo = re.sub(r'\s+', ' ', texto_sem_pontuacao).strip()
+    texto_limpo = re.sub(r'\s+', ' ', texto).strip()
                 
-    # 7. Categoria Master (As 2 primeiras palavras fortes após Stopwords)
     palavras = [p for p in texto_limpo.split() if p not in STOPWORDS_MATCH]
     palavras_fortes = [p for p in palavras if p not in STOPWORDS_CATEGORIA]
     
-    categoria = " ".join(palavras_fortes[:2]) if palavras_fortes else (palavras[0] if palavras else "")
+    categoria = " ".join(palavras_fortes[:2]) if len(palavras_fortes) >= 2 else (palavras_fortes[0] if palavras_fortes else (palavras[0] if palavras else ""))
     
     return {
         "texto_limpo": texto_limpo,
@@ -236,7 +223,7 @@ def converter_decimal_seguro(valor, default="0"):
         return Decimal(default) if default is not None else None
 
 def extrair_ipi_texto(texto):
-    texto = normalizar_texto_basico(texto)
+    texto = normalizar_texto(texto)
     match = re.search(r'IPI\s*(\d+[\,\.]?\d*)\s*%', texto)
     if match:
         return converter_decimal_seguro(match.group(1))
@@ -247,7 +234,6 @@ def extrair_ipi_texto(texto):
 # =========================================================
 
 def calcular_score_semantico(dict_cliente, dict_forn):
-    # 1. Validação Mutex (Exclusão Imediata)
     for grupo in ATRIBUTOS_MUTEX:
         attr_c = grupo.intersection(dict_cliente["atributos"])
         attr_f = grupo.intersection(dict_forn["atributos"])
@@ -256,7 +242,6 @@ def calcular_score_semantico(dict_cliente, dict_forn):
             
     score = 0
     
-    # 2. Categoria Master
     if dict_cliente["categoria"] and dict_cliente["categoria"] == dict_forn["categoria"]:
         score += 40
     else:
@@ -266,7 +251,6 @@ def calcular_score_semantico(dict_cliente, dict_forn):
         else:
             return 0 
             
-    # 3. Atributos Exclusivos
     if dict_cliente["atributos"]:
         matches = len(dict_cliente["atributos"].intersection(dict_forn["atributos"]))
         total = len(dict_cliente["atributos"])
@@ -274,7 +258,6 @@ def calcular_score_semantico(dict_cliente, dict_forn):
     else:
         score += 20
         
-    # 4. Medidas e Volumes
     if dict_cliente["medidas"]:
         matches = len(dict_cliente["medidas"].intersection(dict_forn["medidas"]))
         total = len(dict_cliente["medidas"])
@@ -282,7 +265,6 @@ def calcular_score_semantico(dict_cliente, dict_forn):
     else:
         score += 20
         
-    # 5. Similaridade do Texto Livre
     text_fuzz = fuzz.token_set_ratio(dict_cliente["texto_limpo"], dict_forn["texto_limpo"])
     score += (text_fuzz * 0.2)
     
@@ -355,16 +337,19 @@ def identificar_colunas_inteligente(df, nome_arquivo):
         col_lower = str(col).lower()
         if any(p in col_lower for p in ["descri", "produto", "item", "material"]):
             col_desc = col
-        if any(p in col_lower for p in ["preço", "preco", "valor", "unit"]):
+        if not col_preco and any(p in col_lower for p in ["preço", "preco", "valor", "unit"]):
             if "total" not in col_lower: 
                 col_preco = col
-        # ✅ Aprimorado o dicionário de busca da Quantidade
-        if any(p in col_lower for p in ["qtd", "qtde", "quantidade", "qde", "unidades", "unidade"]):
+        if not col_qtd and any(p in col_lower for p in ["qtd", "qtde", "quantidade", "quant", "qde"]):
             col_qtd = col
         if "ipi" in col_lower:
             col_ipi = col
-        if any(p in col_lower for p in ["preco total", "preço total", "valor total", "total"]):
+        if not col_total and any(p in col_lower for p in ["preco total", "preço total", "valor total", "total"]):
             col_total = col
+
+    if not col_qtd and len(df.columns) >= 3:
+        if "item" in str(df.columns[0]).lower() or "cód" in str(df.columns[0]).lower():
+            col_qtd = df.columns[1]
 
     if not col_desc:
         for col in df.columns:
@@ -373,7 +358,7 @@ def identificar_colunas_inteligente(df, nome_arquivo):
                 break
 
     if DEBUG_MODE:
-        st.info(f"📄 {nome_arquivo}: Desc={col_desc} | Preço={col_preco} | Qtd={col_qtd} | IPI={col_ipi} | Total Nativo={col_total}")
+        st.info(f"📄 {nome_arquivo}: Desc={col_desc} | Preço={col_preco} | Qtd={col_qtd} | IPI={col_ipi} | Total={col_total}")
 
     return col_desc, col_preco, col_qtd, col_ipi, col_total
 
@@ -388,9 +373,8 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
         texto_desc = str(row[col_desc_nome]).strip()
         if not texto_desc or texto_desc.lower() in ["nan", "none", ""]: continue
 
-        # ✅ EXTRAÇÃO DE PREÇO UNITÁRIO INTACTA: Sem remover os espaços para não fundir com a coluna de Total
         valor_preco_raw = str(row[col_preco_nome]).strip() if col_preco_nome else ""
-        valor_preco_limpo = re.sub(r'\bC/\s*\d+\b', '', valor_preco_raw, flags=re.IGNORECASE)
+        valor_preco_limpo = re.sub(r'\bC/\d+\b', '', valor_preco_raw, flags=re.IGNORECASE)
         
         multiplos_precos = re.findall(r'\d+[.,]\d+', valor_preco_limpo)
         if len(multiplos_precos) >= 2: valor_preco_limpo = multiplos_precos[0]
@@ -399,7 +383,7 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
         preco_unit = converter_preco(valor_preco_limpo)
 
         if preco_unit is None:
-            texto_desc_limpo = re.sub(r'\bC/\s*\d+\b', '', texto_desc, flags=re.IGNORECASE)
+            texto_desc_limpo = re.sub(r'\bC/\d+\b', '', texto_desc, flags=re.IGNORECASE)
             texto_desc_limpo = texto_desc_limpo.replace(" ", "")
             numeros = re.findall(r'\b\d{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?\b', texto_desc_limpo)
             if numeros:
@@ -409,17 +393,17 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
 
         if preco_unit is None: continue
 
-        # ✅ A BLINDAGEM DA QUANTIDADE: NUNCA RECALCULAR SE EXISTIR
         quantidade = Decimal("1")
+        qtd_encontrada_oficial = False
         
         if col_qtd_nome and pd.notna(row[col_qtd_nome]):
             qtd_raw = str(row[col_qtd_nome]).strip()
-            # Puxa apenas o número inicial, ignorando se vier junto com a unidade (ex: "100 RK")
             qtd_match = re.search(r'^(\d+[.,]?\d*)', qtd_raw)
             if qtd_match:
                 qtd_teste = converter_decimal_seguro(qtd_match.group(1), default=None)
                 if qtd_teste is not None and qtd_teste > Decimal("0"):
                     quantidade = qtd_teste
+                    qtd_encontrada_oficial = True
 
         ipi = Decimal("0")
         if col_ipi_nome and pd.notna(row[col_ipi_nome]):
@@ -427,12 +411,14 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
         else:
             ipi = extrair_ipi_texto(texto_desc)
 
-        # ✅ VALIDAÇÃO DO TOTAL
         preco_total_arquivo = None
         if col_total_nome and pd.notna(row[col_total_nome]):
             total_raw = str(row[col_total_nome]).strip()
-            total_raw = re.sub(r'\bC/\s*\d+\b', '', total_raw, flags=re.IGNORECASE)
-            preco_total_arquivo = converter_preco(total_raw)
+            total_raw = re.sub(r'\bC/\d+\b', '', total_raw, flags=re.IGNORECASE)
+            preco_total_arquivo = converter_preco(total_raw.replace(" ", ""))
+
+        if not qtd_encontrada_oficial and preco_total_arquivo and preco_unit > Decimal("0"):
+            quantidade = (preco_total_arquivo / preco_unit).quantize(Decimal("0.00"), rounding=ROUND_HALF_UP).normalize()
 
         preco_total_base = preco_unit * quantidade
         if preco_total_arquivo and abs(preco_total_base - preco_total_arquivo) <= Decimal("0.05"):
@@ -555,18 +541,13 @@ if arquivo_cliente and arquivos_fornecedores:
                 df_cliente = df_cliente.loc[:, ~df_cliente.columns.duplicated()].copy()
 
                 col_item_cliente = next((c for c in df_cliente.columns if any(palavra in c.lower() for palavra in ["descri", "produto", "item"])), None)
-                col_qtd_cliente = next((c for c in df_cliente.columns if any(palavra in c.lower() for palavra in ["qtd", "quant"])), None)
-
+                
                 if not col_item_cliente:
                     st.error("Não encontrei coluna de Produto")
                     st.stop()
 
                 df_cliente = df_cliente.dropna(subset=[col_item_cliente])
-                
-                if col_qtd_cliente:
-                    df_cliente["Quantidade"] = pd.to_numeric(df_cliente[col_qtd_cliente], errors="coerce").fillna(1)
-                else:
-                    df_cliente["Quantidade"] = 1
+                df_cliente["Quantidade"] = 1 # O Motor agora ignora a quantidade do cliente para os cálculos
 
                 df_cliente["DICT_MATCH"] = df_cliente[col_item_cliente].astype(str).apply(normalizar_produto_medico)
 
@@ -612,8 +593,7 @@ if arquivo_cliente and arquivos_fornecedores:
                     for _, linha_cliente in df_cliente.iterrows():
                         item_original = str(linha_cliente[col_item_cliente]).strip()
                         dict_cliente = linha_cliente["DICT_MATCH"]
-                        qtd_cliente = Decimal(str(round(float(linha_cliente["Quantidade"]), 4)))
-
+                        
                         candidatos_idx = set()
                         palavras_item = [p for p in dict_cliente["texto_limpo"].split() if len(p) > 2]
 
@@ -674,7 +654,7 @@ if arquivo_cliente and arquivos_fornecedores:
                                 "Score": "-",
                                 "Item Desejado": item_original,
                                 "Produto Encontrado": "NÃO ENCONTRADO",
-                                "Qtd": float(qtd_cliente),
+                                "Qtd": 0,
                                 "Preço Unitário": "R$ 0,00",
                                 "Total s/ IPI": "R$ 0,00",
                                 "IPI": "0%",
