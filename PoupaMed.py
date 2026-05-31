@@ -1,5 +1,5 @@
 # =========================================================
-# V19.3 - ENGINE DE AUDITORIA: CORREÇÃO DE UI (SLIDER E UPLOAD)
+# V20.0 - ENGINE DE COTAÇÃO: PÓS-PROCESSAMENTO E NLP MÉDICO
 # =========================================================
 
 import streamlit as st
@@ -26,45 +26,48 @@ from datetime import datetime
 # =========================================================
 
 st.set_page_config(page_title="PoupaMed", layout="wide", page_icon="🩺")
-st.success("✨ ENGINE V19.3 - INTERFACE FLUIDA ✨")
+st.success("✨ ENGINE COTAÇÃO - PROCESSAMENTO NLP ✨")
 
-# As globais agora são controladas diretamente pelos widgets na barra lateral
-# (Removidas as definições estáticas daqui do topo para evitar conflitos)
+DEBUG_MODE = True
 
 # =========================================================
-# CONFIGURAÇÕES DE EMBALAGEM E BLACKLIST
+# ONTOLOGIA MÉDICA (DICIONÁRIOS E REGRAS ESTRUTURADAS)
 # =========================================================
 
-EMBALAGENS = {
-    'UN': 1, 'UNID': 1, 'UNIDADE': 1,
-    'CX': 100, 'CAIXA': 100, 'CAIXAS': 100,
-    'PCT': 10, 'PACOTE': 10, 'PACOTES': 10,
-    'KIT': 1, 'KITS': 1,
-    'PAR': 2, 'PARES': 2,
-    'RL': 1, 'ROLO': 1, 'ROLOS': 1,
-    'FD': 1, 'FRASCO': 1, 'FRASCOS': 1,
+SINONIMOS = {
+    r'\bTRI\b': 'TRIPLA',
+    r'\b3 CAMADAS\b': 'TRIPLA',
+    r'\bBCA\b': 'BRANCA',
+    r'\bDESC\b': 'DESCARTAVEL',
+    r'\bVACUTUBE\b': 'TUBO A VACUO',
+    r'\bGEL SEP\b': 'GEL SEPARADOR',
+    r'\bAML\b': 'AMARELO',
+    r'\bPERF\b': 'PERFUROCORTANTE',
+    r'\bC/\b': 'COM ',
+    r'\bS/\b': 'SEM ',
+    r'\bUND\b': 'UN',
+    r'\bPCT\b': 'PACOTE'
 }
 
-BLACKLIST_SEMANTICA = [
-    ("URETRAL", "NASOGASTRICA"),
-    ("ADULTO", "INFANTIL"),
-    ("ESTERIL", "NAO_ESTERIL"),
-    ("DESCARTAVEL", "PERMANENTE"),
-    ("VENOSO", "ARTERIAL"),
-    ("SILICONE", "LATEX"),
-    ("C20", "C100"),
-    ("25X7", "40X12"),
-    ("20ML", "60ML"),
-    ("LATEX", "NITRILICA"),
-    ("ESTERIL", "NAO ESTERIL"),
+ATRIBUTOS_MUTEX = [
+    {"ADULTO", "INFANTIL", "PEDIATRICO", "NEONATAL"},
+    {"ESTERIL", "NAO ESTERIL"},
+    {"LATEX", "NITRILICA", "SILICONE", "VINIL"},
+    {"C20", "C100", "C50", "C200"},
+    {"25X7", "40X12", "13X45", "30X8"},
+    {"URETRAL", "NASOGASTRICA", "ENDOTRAQUEAL"},
+    {"K3", "GEL SEPARADOR", "CITRATO", "HEPARINA", "FLUORETO"}
 ]
 
-PALAVRAS_CRITICAS = ["EDTA", "GEL", "CITRATO", "HEPARINA", "SERINGA", "SCALP"]
+MARCAS_CONHECIDAS = [
+    "MEDIX", "LABOR IMPORT", "DESCARPACK", "BIOCON", "FIRSTLAB", "NEWPROV", 
+    "VACUPLAST", "RENYLAB", "BD", "3M", "JOHNSON", "MEDTRONIC", "BBRAUN", "BAXTER"
+]
 
 STOPWORDS_MATCH = {"KIT", "CX", "UND", "UN", "ML", "MG", "G", "L", "PCT", "PARA", "COM"}
 
 # =========================================================
-# FUNÇÕES DE LIMPEZA E TEXTO
+# FUNÇÕES DE NLP E EXTRAÇÃO DE ATRIBUTOS
 # =========================================================
 
 def normalizar_texto(texto):
@@ -74,65 +77,62 @@ def normalizar_texto(texto):
     texto = re.sub(r'[^A-Z0-9\s]', ' ', texto)
     return re.sub(r'\s+', ' ', texto).strip()
 
-def remover_palavras_irrelevantes(texto):
-    palavras_ruins = ["MARCA", "PREMIUM", "DESCARBOX", "COM", "SEM", "C/", "S/"]
-    return " ".join([p for p in texto.split() if p not in palavras_ruins])
+def extrair_medidas(texto):
+    encontradas = re.findall(r'\b\d+[\.,]?\d*\s*(?:ML|L|MG|G|KG|MM|CM)\b', texto)
+    normalizadas = set()
+    for m in encontradas:
+        m = m.replace(',', '.')
+        m = re.sub(r'\s+', '', m) # Transforma "3.5 ML" em "3.5ML"
+        normalizadas.add(m)
+    return normalizadas
 
-def preparar_texto_match(texto):
-    texto_limpo = remover_palavras_irrelevantes(normalizar_texto(texto))
-    texto_limpo = re.sub(r'^\d+\s*', '', texto_limpo)
-    return texto_limpo
-
-def ler_lista_desejos_txt(arquivo_txt):
-    try:
-        conteudo = arquivo_txt.read()
-        try:
-            texto = conteudo.decode("utf-8")
-        except UnicodeDecodeError:
-            texto = conteudo.decode("latin-1")
-        
-        linhas = texto.splitlines()
-        dados = []
-        
-        for linha in linhas:
-            linha = linha.strip()
-            if not linha or linha.startswith('#') or linha.startswith('//'):
-                continue
+def normalizar_produto_medico(texto):
+    """Transforma texto livre em um dicionário de atributos (Grafo de Conhecimento)"""
+    texto = normalizar_texto(texto)
+    
+    # 1. Aplicação de Sinônimos
+    for padrao, sub in SINONIMOS.items():
+        texto = re.sub(padrao, sub, texto)
+    texto = re.sub(r'\s+', ' ', texto).strip()
+    
+    # 2. Extração e Remoção de Marca
+    marca_encontrada = None
+    for marca in MARCAS_CONHECIDAS:
+        if re.search(rf'\b{marca}\b', texto):
+            marca_encontrada = marca
+            texto = re.sub(rf'\b{marca}\b', '', texto).strip()
             
-            linha = re.sub(r'\s+', ' ', linha)
-            match = re.match(r'(.+?)\s*[\-;:|,.]{1,2}\s*(\d+)', linha)
-            
-            if not match:
-                match = re.match(r'(.+?)\s+(\d+)\s*$', linha)
-            
-            if not match:
-                dados.append({"Produto": linha, "Quantidade": "1"})
-            else:
-                produto = match.group(1).strip()
-                quantidade = match.group(2).strip()
-                dados.append({"Produto": produto, "Quantidade": quantidade})
-        
-        if not dados:
-            st.error("Nenhum item válido encontrado no arquivo TXT")
-            return None
-            
-        return pd.DataFrame(dados)
-        
-    except Exception as e:
-        st.error(f"Erro ao ler arquivo TXT: {e}")
-        return None
+    # 3. Extração de Medidas
+    medidas = extrair_medidas(texto)
+    
+    # 4. Atributos Exclusivos (Mutex)
+    atributos = set()
+    for grupo in ATRIBUTOS_MUTEX:
+        for attr in grupo:
+            if re.search(rf'\b{attr}\b', texto):
+                atributos.add(attr)
+                
+    # 5. Categoria Master (Primeira palavra forte)
+    palavras = [p for p in texto.split() if p not in STOPWORDS_MATCH]
+    categoria = palavras[0] if palavras else ""
+    
+    return {
+        "texto_limpo": texto,
+        "categoria": categoria,
+        "marca": marca_encontrada,
+        "medidas": medidas,
+        "atributos": atributos
+    }
 
 # =========================================================
-# CONVERSÃO E MEDIDAS
+# CONVERSÃO FINANCEIRA E MEDIDAS
 # =========================================================
 
 def converter_preco(valor):
     if pd.isna(valor): return None
     valor = str(valor).strip()
     if valor in ["", "nan", "None", "NaN"]: return None
-    
     valor = valor.replace("R$", "").replace(" ", "")
-    
     try:
         if "," in valor and "." in valor:
             if valor.rfind(',') > valor.rfind('.'):
@@ -141,7 +141,6 @@ def converter_preco(valor):
                 valor = valor.replace(",", "")
         elif "," in valor:
             valor = valor.replace(",", ".")
-        
         preco = Decimal(valor)
         if preco > 100000: return None
         return preco
@@ -158,14 +157,11 @@ def converter_decimal_seguro(valor, default="0"):
     try:
         valor = str(valor).strip().upper().replace(" ", "")
         valor_limpo = re.sub(r'[^0-9,\.]', '', valor)
-        
         if not valor_limpo: return Decimal(default)
-
         if "." in valor_limpo and "," in valor_limpo:
             valor_limpo = valor_limpo.replace(".", "").replace(",", ".")
         elif "," in valor_limpo:
             valor_limpo = valor_limpo.replace(",", ".")
-
         return Decimal(valor_limpo)
     except:
         return Decimal(default)
@@ -177,90 +173,51 @@ def extrair_ipi_texto(texto):
         return converter_decimal_seguro(match.group(1))
     return Decimal("0")
 
-def extrair_medida(texto):
-    match = re.search(r'(\d+[\,\.]?\d*)\s*(ML|L|MG|G|KG|MM|CM)', normalizar_texto(texto))
-    return f"{match.group(1)}{match.group(2)}" if match else None
-
-def extrair_embalagem(texto):
-    texto_norm = normalizar_texto(texto)
-    palavras = texto_norm.split()
-    for i, palavra in enumerate(palavras):
-        if palavra in EMBALAGENS:
-            if i > 0 and palavras[i-1].isdigit():
-                return f"{palavras[i-1]}{palavra}", EMBALAGENS[palavra] * int(palavras[i-1])
-            return palavra, EMBALAGENS[palavra]
-    return None, None
-
-def extrair_marca(texto):
-    marcas_conhecidas = ["BD", "3M", "JOHNSON", "MEDTRONIC", "BBRAUN", "BAXTER"]
-    for marca in marcas_conhecidas:
-        if marca in normalizar_texto(texto):
-            return marca
-    return None
-
 # =========================================================
-# SCORE COMPOSTO
+# SCORE SEMÂNTICO (O NOVO CORAÇÃO DO ALGORITMO)
 # =========================================================
 
-def verificar_blacklist(texto1, texto2):
-    texto1_norm = normalizar_texto(texto1)
-    texto2_norm = normalizar_texto(texto2)
-    for grupo1, grupo2 in BLACKLIST_SEMANTICA:
-        if (grupo1 in texto1_norm and grupo2 in texto2_norm) or \
-           (grupo2 in texto1_norm and grupo1 in texto2_norm):
-            return True
-    return False
-
-@lru_cache(maxsize=10000)
-def calcular_score_rapidfuzz(texto1, texto2):
-    score1 = fuzz.token_sort_ratio(texto1, texto2)
-    score2 = fuzz.token_set_ratio(texto1, texto2)
-    score3 = fuzz.partial_ratio(texto1, texto2)
-    return max(score1, score2, score3)
-
-def calcular_score_composto(item_cliente, item_fornecedor, texto_cliente, texto_fornecedor):
-    texto_cliente_norm = normalizar_texto(texto_cliente)
-    texto_fornecedor_norm = normalizar_texto(texto_fornecedor)
-
-    score_textual = calcular_score_rapidfuzz(item_cliente, item_fornecedor)
-
-    for palavra in PALAVRAS_CRITICAS:
-        if palavra in texto_cliente_norm and palavra not in texto_fornecedor_norm:
-            score_textual -= 20
-
-    palavras_cliente = set(item_cliente.split())
-    palavras_fornecedor = set(item_fornecedor.split())
-    palavras_comuns = len(palavras_cliente.intersection(palavras_fornecedor))
-
-    if palavras_comuns > 0:
-        bonus_palavras = min(20, palavras_comuns * 5)
-        score_textual = min(100, score_textual + bonus_palavras)
-
-    medida_cliente = extrair_medida(texto_cliente)
-    medida_fornecedor = extrair_medida(texto_fornecedor)
-
-    score_medida = 0
-    if not medida_cliente: score_medida = 15
-    elif medida_cliente == medida_fornecedor: score_medida = 15
-    elif medida_cliente and medida_fornecedor: score_medida = -30
-
-    emb_cliente, qtd_cliente = extrair_embalagem(texto_cliente)
-    emb_fornecedor, qtd_fornecedor = extrair_embalagem(texto_fornecedor)
-
-    score_embalagem = 0
-    if not emb_cliente: score_embalagem = 10
-    elif emb_cliente == emb_fornecedor: score_embalagem = 10
-    elif emb_cliente and emb_fornecedor: score_embalagem = -10
-
-    marca_cliente = extrair_marca(texto_cliente)
-    marca_fornecedor = extrair_marca(texto_fornecedor)
-
-    score_marca = 0
-    if not marca_cliente: score_marca = 5
-    elif marca_cliente == marca_fornecedor: score_marca = 5
-
-    score_final = (score_textual * 0.7) + score_medida + score_embalagem + score_marca
-    return max(0, min(score_final, 100))
+def calcular_score_semantico(dict_cliente, dict_forn):
+    # 1. Validação Mutex (Exclusão Imediata)
+    for grupo in ATRIBUTOS_MUTEX:
+        attr_c = grupo.intersection(dict_cliente["atributos"])
+        attr_f = grupo.intersection(dict_forn["atributos"])
+        if attr_c and attr_f and not attr_c.intersection(attr_f):
+            return 0 # Incompatibilidade direta (ex: ADULTO vs INFANTIL)
+            
+    score = 0
+    
+    # 2. Categoria Master (Peso 40)
+    if dict_cliente["categoria"] and dict_cliente["categoria"] == dict_forn["categoria"]:
+        score += 40
+    else:
+        cat_fuzz = fuzz.ratio(dict_cliente["categoria"], dict_forn["categoria"])
+        if cat_fuzz > 80:
+            score += (cat_fuzz * 0.4)
+        else:
+            return 0 # Corta se a categoria primária for fundamentalmente diferente
+            
+    # 3. Atributos Exclusivos (Peso 20)
+    if dict_cliente["atributos"]:
+        matches = len(dict_cliente["atributos"].intersection(dict_forn["atributos"]))
+        total = len(dict_cliente["atributos"])
+        score += (matches / total) * 20
+    else:
+        score += 20 # Bônus se o cliente for genérico
+        
+    # 4. Medidas e Volumes (Peso 20)
+    if dict_cliente["medidas"]:
+        matches = len(dict_cliente["medidas"].intersection(dict_forn["medidas"]))
+        total = len(dict_cliente["medidas"])
+        score += (matches / total) * 20
+    else:
+        score += 20 # Bônus se o cliente for genérico
+        
+    # 5. Similaridade do Texto Livre sem Marca (Peso 20)
+    text_fuzz = fuzz.token_set_ratio(dict_cliente["texto_limpo"], dict_forn["texto_limpo"])
+    score += (text_fuzz * 0.2)
+    
+    return score
 
 # =========================================================
 # MOTORES DE EXTRAÇÃO E LIMPEZA
@@ -395,7 +352,6 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
         preco_total_base = None
         match_reconciliacao = False
 
-        # ✨ RECONCILIAÇÃO MATEMÁTICA EXTREMA ✨
         linha_completa = " ".join(row.astype(str)).replace("nan", "").replace("None", "")
         linha_limpa_numeros = re.sub(r'(\d)\s+([.,]?\d)', r'\1\2', linha_completa)
         linha_limpa_numeros = re.sub(r'(\d)\s+([.,]?\d)', r'\1\2', linha_limpa_numeros) 
@@ -439,7 +395,7 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
 
     df_resultado = pd.DataFrame({
         "Descrição Limpa": novas_descricoes,
-        "Descrição Match": [preparar_texto_match(x) for x in novas_descricoes],
+        "DICT_MATCH": [normalizar_produto_medico(x) for x in novas_descricoes],
         "Preço Unitário": novos_precos,
         "Quantidade Fornecedor": novas_qtds,
         "IPI": novos_ipis,
@@ -451,7 +407,8 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
 def criar_indice_fornecedor(df_forn_processado):
     indice = defaultdict(list)
     for idx, row in df_forn_processado.iterrows():
-        palavras = str(row["Descrição Match"]).split()
+        dict_match = row["DICT_MATCH"]
+        palavras = dict_match["texto_limpo"].split()
         if palavras:
             indice[f"PRIMEIRA_{palavras[0]}"].append(idx)
             for palavra in palavras:
@@ -485,19 +442,19 @@ def gerar_pdf_relatorio(nome_fornecedor, total, itens_faltando, df_detalhes):
     elementos.append(info)
     elementos.append(Spacer(1, 20))
 
-    dados_tabela = [["Item Desejado", "Produto Encontrado", "Compat.", "Qtd", "Preço Unit.", "Total s/ IPI", "IPI", "Total c/ IPI"]]
+    dados_tabela = [["Status", "Item Desejado", "Produto Encontrado", "Qtd", "Preço Unit.", "Total s/ IPI", "IPI", "Total c/ IPI"]]
     for _, row in df_detalhes.iterrows():
         item_desejado = Paragraph(str(row["Item Desejado"]), style_normal)
         produto_encontrado = Paragraph(str(row["Produto Encontrado"]), style_normal)
         
-        dados_tabela.append([item_desejado, produto_encontrado, 
-                            str(row["Compatibilidade"]), str(row["Qtd"]), 
-                            str(row["Preço Unitário"]), str(row["Total s/ IPI"]), 
-                            str(row["IPI"]), str(row["Total c/ IPI"])])
+        dados_tabela.append([str(row["Status"]), item_desejado, produto_encontrado, 
+                            str(row["Qtd"]), str(row["Preço Unitário"]), 
+                            str(row["Total s/ IPI"]), str(row["IPI"]), 
+                            str(row["Total c/ IPI"])])
     
     dados_tabela.append(["", "", "", "", "", "", "TOTAL GERAL", formatar_brl(total)])
 
-    tabela = Table(dados_tabela, repeatRows=1, colWidths=[110, 110, 45, 35, 55, 60, 30, 65])
+    tabela = Table(dados_tabela, repeatRows=1, colWidths=[60, 95, 95, 30, 50, 55, 30, 60])
     ultima_linha = len(dados_tabela) - 1
     tabela.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#1f4e78")),
@@ -529,14 +486,12 @@ arquivos_fornecedores = st.sidebar.file_uploader("Planilhas e PDFs dos Fornecedo
                                                  type=['xlsx', 'csv', 'txt', 'pdf'], 
                                                  accept_multiple_files=True, key="fornecedores")
 
-# ✅ SOLUÇÃO DO BUG DA INTERFACE AQUI
 DEBUG_MODE = st.sidebar.checkbox("🔧 Modo Debug (mostrar logs)", value=True)
-SCORE_MINIMO = st.sidebar.slider("🎯 Score mínimo para match", 20, 100, 72, 5)
 
 if arquivo_cliente and arquivos_fornecedores:
     if st.sidebar.button("🚀 GERAR COTAÇÃO", use_container_width=True, type="primary"):
         try:
-            with st.spinner("Extraindo e processando dados comerciais..."):
+            with st.spinner("Analisando ontologia semântica médica..."):
                 if arquivo_cliente.name.endswith(".xlsx"):
                     df_cliente = pd.read_excel(arquivo_cliente)
                 elif arquivo_cliente.name.endswith(".txt"):
@@ -562,7 +517,7 @@ if arquivo_cliente and arquivos_fornecedores:
                 else:
                     df_cliente["Quantidade"] = 1
 
-                df_cliente["ITEM_MATCH"] = df_cliente[col_item_cliente].astype(str).apply(preparar_texto_match)
+                df_cliente["DICT_MATCH"] = df_cliente[col_item_cliente].astype(str).apply(normalizar_produto_medico)
 
                 resultados_finais = []
                 detalhes_fornecedores = {}
@@ -605,11 +560,11 @@ if arquivo_cliente and arquivos_fornecedores:
 
                     for _, linha_cliente in df_cliente.iterrows():
                         item_original = str(linha_cliente[col_item_cliente]).strip()
-                        item_match = linha_cliente["ITEM_MATCH"]
+                        dict_cliente = linha_cliente["DICT_MATCH"]
                         qtd_cliente = Decimal(str(round(float(linha_cliente["Quantidade"]), 4)))
 
                         candidatos_idx = set()
-                        palavras_item = [p for p in item_match.split() if p not in STOPWORDS_MATCH and len(p) > 2]
+                        palavras_item = [p for p in dict_cliente["texto_limpo"].split() if len(p) > 2]
 
                         if palavras_item:
                             candidatos_idx.update(indice_fornecedor.get(f"PRIMEIRA_{palavras_item[0]}", []))
@@ -622,16 +577,17 @@ if arquivo_cliente and arquivos_fornecedores:
                         candidatos = []
                         for idx in candidatos_idx:
                             linha_forn = df_forn_processado.iloc[idx]
-                            if verificar_blacklist(item_original, linha_forn["Descrição Limpa"]): continue
+                            dict_forn = linha_forn["DICT_MATCH"]
                             
-                            chave = (item_match, linha_forn["Descrição Match"])
+                            chave = (item_original, linha_forn["Descrição Limpa"])
                             if chave in cache_scores:
                                 score = cache_scores[chave]
                             else:
-                                score = calcular_score_composto(item_match, linha_forn["Descrição Match"], item_original, linha_forn["Descrição Limpa"])
+                                score = calcular_score_semantico(dict_cliente, dict_forn)
                                 cache_scores[chave] = score
                             
-                            if score >= SCORE_MINIMO:
+                            # CORTA TUDO QUE TIVER MENOS DE 70 PONTOS (Score Interno Hardcoded)
+                            if score >= 70:
                                 candidatos.append({"linha": linha_forn, "score": score, "preco_base": linha_forn["Preço Total Base"]})
 
                         if candidatos:
@@ -647,11 +603,15 @@ if arquivo_cliente and arquivos_fornecedores:
                             subtotal_com_ipi = subtotal_com_ipi.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
                             total_carrinho += subtotal_com_ipi
+                            
+                            # Avalia status interno baseado na regra
+                            status_auditoria = "✅ Confirmado" if escolhido['score'] >= 90 else "⚠️ Revisar"
 
                             itens_detalhados.append({
+                                "Status": status_auditoria,
+                                "Score": f"{escolhido['score']:.0f}",
                                 "Item Desejado": item_original,
                                 "Produto Encontrado": escolhido["linha"]["Descrição Limpa"],
-                                "Compatibilidade": f"{escolhido['score']:.0f}%",
                                 "Qtd": float(qtd_fornecedor),
                                 "Preço Unitário": formatar_brl(preco_unitario),
                                 "Total s/ IPI": formatar_brl(preco_total_base),
@@ -661,9 +621,10 @@ if arquivo_cliente and arquivos_fornecedores:
                         else:
                             itens_nao_encontrados += 1
                             itens_detalhados.append({
+                                "Status": "❌ Rejeitado",
+                                "Score": "-",
                                 "Item Desejado": item_original,
-                                "Produto Encontrado": "❌ NÃO ENCONTRADO",
-                                "Compatibilidade": "0%",
+                                "Produto Encontrado": "NÃO ENCONTRADO",
                                 "Qtd": float(qtd_cliente),
                                 "Preço Unitário": "R$ 0,00",
                                 "Total s/ IPI": "R$ 0,00",
@@ -710,6 +671,8 @@ if arquivo_cliente and arquivos_fornecedores:
                     st.markdown("## 🔍 Auditoria Inteligente")
                     fornecedor_select = st.selectbox("Escolha a empresa para auditar:", df_resultados["Fornecedor"].tolist())
                     df_auditoria = detalhes_fornecedores[fornecedor_select]
+                    
+                    # Estiliza o dataframe para focar na auditoria
                     st.dataframe(df_auditoria, use_container_width=True)
 
                     st.write("---")
