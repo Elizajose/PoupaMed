@@ -1,5 +1,5 @@
 # =========================================================
-# V22.0 - ENGINE SEMÂNTICA E BLINDAGEM FINANCEIRA
+# V23.0 - ENGINE SEMÂNTICA: TRAVA ESPACIAL E BLINDAGEM NLP
 # =========================================================
 
 import streamlit as st
@@ -26,10 +26,10 @@ from datetime import datetime
 # =========================================================
 
 st.set_page_config(page_title="PoupaMed", layout="wide", page_icon="🩺")
-st.success("✨ ENGINE V22.0 - NLP E BLINDAGEM DE CÁLCULOS ✨")
+st.success("✨ ENGINE V23.0 - TRAVA DE QUANTIDADE E NLP ✨")
 
 DEBUG_MODE = True
-SCORE_MINIMO = 70 # Chumbado no código, removido do controle do usuário
+SCORE_MINIMO = 70 
 
 # =========================================================
 # ONTOLOGIA MÉDICA (DICIONÁRIOS E REGRAS ESTRUTURADAS)
@@ -66,7 +66,7 @@ MARCAS_CONHECIDAS = [
 ]
 
 STOPWORDS_MATCH = {"KIT", "CX", "UND", "UN", "ML", "MG", "G", "L", "PCT", "PARA", "COM"}
-STOPWORDS_CATEGORIA = {"TUBO", "VACUTUBE", "A", "VACUO", "PARA", "COM", "DE", "DA", "DO", "EM", "E", "C", "S"}
+STOPWORDS_CATEGORIA = {"TUBO", "VACUTUBE", "A", "VACUO", "PARA", "COM", "DE", "DA", "DO", "EM", "E", "C", "S", "COLETOR"}
 
 # =========================================================
 # FUNÇÕES DE LEITURA E ARQUIVOS
@@ -141,8 +141,12 @@ def extrair_medidas(texto):
     return normalizadas
 
 def normalizar_produto_medico(texto):
-    """Transforma texto livre em um dicionário de atributos"""
     texto = normalizar_texto(texto)
+    
+    texto = re.sub(r'\bC/\d+\b', '', texto)
+    texto = re.sub(r'\b\d+\s*UND?\b', '', texto)
+    texto = re.sub(r'\bCX\s*\d+\b', '', texto)
+    texto = re.sub(r'\bEMB\s*C/\d+\b', '', texto)
     
     for padrao, sub in SINONIMOS.items():
         texto = re.sub(padrao, sub, texto)
@@ -162,20 +166,12 @@ def normalizar_produto_medico(texto):
             if re.search(rf'\b{attr}\b', texto):
                 atributos.add(attr)
 
-    texto_limpo = texto
-    texto_limpo = re.sub(r'\b(C/|CX|PCT|UND|UN|EMB|FR)\s*\d+\b', '', texto_limpo, flags=re.IGNORECASE)
-    texto_limpo = re.sub(r'\b\d+\s*(UN|UND|ML|MG|G|L|CX|PCT|FR|RL)\b', '', texto_limpo, flags=re.IGNORECASE)
-    texto_limpo = re.sub(r'\s+', ' ', texto_limpo).strip()
+    texto_limpo = re.sub(r'\s+', ' ', texto).strip()
                 
     palavras = [p for p in texto_limpo.split() if p not in STOPWORDS_MATCH]
     palavras_fortes = [p for p in palavras if p not in STOPWORDS_CATEGORIA]
     
-    if len(palavras_fortes) >= 2:
-        categoria = f"{palavras_fortes[0]} {palavras_fortes[1]}"
-    elif len(palavras_fortes) == 1:
-        categoria = palavras_fortes[0]
-    else:
-        categoria = palavras[0] if palavras else ""
+    categoria = " ".join(palavras_fortes[:2]) if palavras_fortes else (palavras[0] if palavras else "")
     
     return {
         "texto_limpo": texto_limpo,
@@ -235,7 +231,7 @@ def extrair_ipi_texto(texto):
     return Decimal("0")
 
 # =========================================================
-# SCORE SEMÂNTICO 
+# SCORE SEMÂNTICO
 # =========================================================
 
 def calcular_score_semantico(dict_cliente, dict_forn):
@@ -342,15 +338,21 @@ def identificar_colunas_inteligente(df, nome_arquivo):
         col_lower = str(col).lower()
         if any(p in col_lower for p in ["descri", "produto", "item", "material"]):
             col_desc = col
-        if any(p in col_lower for p in ["preço", "preco", "valor", "unit"]):
+        if not col_preco and any(p in col_lower for p in ["preço", "preco", "valor", "unit"]):
             if "total" not in col_lower: 
                 col_preco = col
-        if any(p in col_lower for p in ["qtd", "qtde", "quantidade", "qde", "unidades", "unidade"]):
+        # AQUI FOI ONDE A MÁGICA ACONTECEU: Removemos 'unidade' para não sequestrar a Quantidade
+        if not col_qtd and any(p in col_lower for p in ["qtd", "qtde", "quantidade", "quant", "qde"]):
             col_qtd = col
         if "ipi" in col_lower:
             col_ipi = col
-        if any(p in col_lower for p in ["preco total", "preço total", "valor total", "total"]):
+        if not col_total and any(p in col_lower for p in ["preco total", "preço total", "valor total", "total"]):
             col_total = col
+
+    # TRAVA ESPACIAL: Se não achou QTD por nome, mas a 1ª coluna é Item, a 2ª é obrigatoriamente a Quantidade
+    if not col_qtd and len(df.columns) >= 3:
+        if "item" in str(df.columns[0]).lower() or "cód" in str(df.columns[0]).lower():
+            col_qtd = df.columns[1]
 
     if not col_desc:
         for col in df.columns:
@@ -374,9 +376,8 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
         texto_desc = str(row[col_desc_nome]).strip()
         if not texto_desc or texto_desc.lower() in ["nan", "none", ""]: continue
 
-        # IGNORAR C/100 E PADRÕES DE EMBALAGEM ANTES DE PROCURAR PREÇO
         valor_preco_raw = str(row[col_preco_nome]).strip() if col_preco_nome else ""
-        valor_preco_limpo = re.sub(r'\bC/\s*\d+\b', '', valor_preco_raw, flags=re.IGNORECASE)
+        valor_preco_limpo = re.sub(r'\bC/\d+\b', '', valor_preco_raw, flags=re.IGNORECASE)
         valor_preco_limpo = valor_preco_limpo.replace(" ", "") 
         
         multiplos_precos = re.findall(r'\d{1,}(?:[.,]\d{3})*(?:[.,]\d+)?', valor_preco_limpo)
@@ -385,9 +386,11 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
         preco_unit = converter_preco(valor_preco_limpo)
 
         if preco_unit is None:
-            texto_desc_limpo = re.sub(r'\bC/\s*\d+\b', '', texto_desc, flags=re.IGNORECASE)
-            texto_desc_limpo = texto_desc_limpo.replace(" ", "")
-            numeros = re.findall(r'\b\d{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?\b', texto_desc_limpo)
+            # BLINDAGEM CONTRA DESCRIÇÃO: Tira todo o lixo de ml, g, grs, un, pct antes de procurar o preço!
+            texto_limpo_numeros = re.sub(r'\b\d+[\.,]?\d*\s*(ML|L|GRS|G|MG|KG|MM|CM|UND|UN|CX|PCT)\b', '', texto_desc, flags=re.IGNORECASE)
+            texto_limpo_numeros = re.sub(r'\bC/\s*\d+\b', '', texto_limpo_numeros, flags=re.IGNORECASE)
+            
+            numeros = re.findall(r'\b\d{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?\b', texto_limpo_numeros.replace(" ", ""))
             if numeros:
                 preco_teste = converter_preco(numeros[-1])
                 if preco_teste:
@@ -395,14 +398,14 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
 
         if preco_unit is None: continue
 
-        # PRESERVAR QUANTIDADE ORIGINAL DO FORNECEDOR NUNCA RECALCULANDO SE ELA EXISTIR
+        # QUANTIDADE INTOCÁVEL: Se achou na coluna, trava e não mexe.
         quantidade = Decimal("1")
         qtd_encontrada_oficial = False
         
         if col_qtd_nome and pd.notna(row[col_qtd_nome]):
             qtd_raw = str(row[col_qtd_nome]).strip()
             if qtd_raw and qtd_raw.lower() not in ["nan", "none"]:
-                qtd_raw = re.sub(r'[A-Za-z]', '', qtd_raw) # Remove letras como UND
+                qtd_raw = re.sub(r'[A-Za-z]', '', qtd_raw) 
                 qtd_teste = converter_decimal_seguro(qtd_raw, default=None)
                 if qtd_teste is not None and qtd_teste > 0:
                     quantidade = qtd_teste
@@ -414,18 +417,17 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
         else:
             ipi = extrair_ipi_texto(texto_desc)
 
-        # TOTAL NATIVO
+        # TOTAL NATIVO E RECONCILIAÇÃO SEGURO
         preco_total_arquivo = None
         if col_total_nome and pd.notna(row[col_total_nome]):
             total_raw = str(row[col_total_nome]).strip()
-            total_raw = re.sub(r'\bC/\s*\d+\b', '', total_raw, flags=re.IGNORECASE)
+            total_raw = re.sub(r'\bC/\d+\b', '', total_raw, flags=re.IGNORECASE)
             preco_total_arquivo = converter_preco(total_raw.replace(" ", ""))
 
-        # ENGENHARIA REVERSA SOMENTE SE A QUANTIDADE NÃO FOI LIDA OFICIALMENTE
         if not qtd_encontrada_oficial and preco_total_arquivo and preco_unit > Decimal("0"):
             quantidade = (preco_total_arquivo / preco_unit).quantize(Decimal("0.00"), rounding=ROUND_HALF_UP).normalize()
 
-        # REGRA DE OURO: Total = Preço Unitário * Quantidade
+        # REGRA DE OURO FINANCEIRA
         preco_total_base = preco_unit * quantidade
         if preco_total_arquivo and abs(preco_total_base - preco_total_arquivo) <= Decimal("0.05"):
             preco_total_base = preco_total_arquivo
