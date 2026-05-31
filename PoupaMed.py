@@ -1,5 +1,5 @@
 # =========================================================
-# V20.0 - ENGINE DE COTAÇÃO: PÓS-PROCESSAMENTO E NLP MÉDICO
+# V20.0 - ENGINE SEMÂNTICA: CORREÇÃO DE LEITURA DE TXT
 # =========================================================
 
 import streamlit as st
@@ -26,7 +26,7 @@ from datetime import datetime
 # =========================================================
 
 st.set_page_config(page_title="PoupaMed", layout="wide", page_icon="🩺")
-st.success("✨ ENGINE COTAÇÃO - PROCESSAMENTO NLP ✨")
+st.success("✨ ENGINE V20.0 - PROCESSAMENTO  (NLP) ✨")
 
 DEBUG_MODE = True
 
@@ -67,6 +67,50 @@ MARCAS_CONHECIDAS = [
 STOPWORDS_MATCH = {"KIT", "CX", "UND", "UN", "ML", "MG", "G", "L", "PCT", "PARA", "COM"}
 
 # =========================================================
+# FUNÇÕES DE LEITURA E ARQUIVOS
+# =========================================================
+
+def ler_lista_desejos_txt(arquivo_txt):
+    """Lê arquivo TXT com formato flexível (Recolocado na V20.1)"""
+    try:
+        conteudo = arquivo_txt.read()
+        try:
+            texto = conteudo.decode("utf-8")
+        except UnicodeDecodeError:
+            texto = conteudo.decode("latin-1")
+        
+        linhas = texto.splitlines()
+        dados = []
+        
+        for linha in linhas:
+            linha = linha.strip()
+            if not linha or linha.startswith('#') or linha.startswith('//'):
+                continue
+            
+            linha = re.sub(r'\s+', ' ', linha)
+            match = re.match(r'(.+?)\s*[\-;:|,.]{1,2}\s*(\d+)', linha)
+            
+            if not match:
+                match = re.match(r'(.+?)\s+(\d+)\s*$', linha)
+            
+            if not match:
+                dados.append({"Produto": linha, "Quantidade": "1"})
+            else:
+                produto = match.group(1).strip()
+                quantidade = match.group(2).strip()
+                dados.append({"Produto": produto, "Quantidade": quantidade})
+        
+        if not dados:
+            st.error("Nenhum item válido encontrado no arquivo TXT")
+            return None
+            
+        return pd.DataFrame(dados)
+        
+    except Exception as e:
+        st.error(f"Erro ao ler arquivo TXT: {e}")
+        return None
+
+# =========================================================
 # FUNÇÕES DE NLP E EXTRAÇÃO DE ATRIBUTOS
 # =========================================================
 
@@ -82,7 +126,7 @@ def extrair_medidas(texto):
     normalizadas = set()
     for m in encontradas:
         m = m.replace(',', '.')
-        m = re.sub(r'\s+', '', m) # Transforma "3.5 ML" em "3.5ML"
+        m = re.sub(r'\s+', '', m) 
         normalizadas.add(m)
     return normalizadas
 
@@ -586,7 +630,6 @@ if arquivo_cliente and arquivos_fornecedores:
                                 score = calcular_score_semantico(dict_cliente, dict_forn)
                                 cache_scores[chave] = score
                             
-                            # CORTA TUDO QUE TIVER MENOS DE 70 PONTOS (Score Interno Hardcoded)
                             if score >= 70:
                                 candidatos.append({"linha": linha_forn, "score": score, "preco_base": linha_forn["Preço Total Base"]})
 
@@ -604,7 +647,6 @@ if arquivo_cliente and arquivos_fornecedores:
 
                             total_carrinho += subtotal_com_ipi
                             
-                            # Avalia status interno baseado na regra
                             status_auditoria = "✅ Confirmado" if escolhido['score'] >= 90 else "⚠️ Revisar"
 
                             itens_detalhados.append({
@@ -671,8 +713,6 @@ if arquivo_cliente and arquivos_fornecedores:
                     st.markdown("## 🔍 Auditoria Inteligente")
                     fornecedor_select = st.selectbox("Escolha a empresa para auditar:", df_resultados["Fornecedor"].tolist())
                     df_auditoria = detalhes_fornecedores[fornecedor_select]
-                    
-                    # Estiliza o dataframe para focar na auditoria
                     st.dataframe(df_auditoria, use_container_width=True)
 
                     st.write("---")
