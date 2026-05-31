@@ -1,5 +1,5 @@
 # =========================================================
-# V24.0 - ENGINE SEMÂNTICA: FIM DO BUG DO TXT E MEDIDAS
+# V25.0 - ENGINE SEMÂNTICA: ALGORITMO DE EXTRAÇÃO EM ARRAY
 # =========================================================
 
 import streamlit as st
@@ -26,7 +26,7 @@ from datetime import datetime
 # =========================================================
 
 st.set_page_config(page_title="PoupaMed", layout="wide", page_icon="🩺")
-st.success("✨ ENGINE V24.0 - FIX DO TXT E MATCH DE MEDIDAS ✨")
+st.success("✨ ENGINE V25.0 - EXTRAÇÃO DE PREÇOS EM ARRAY ✨")
 
 DEBUG_MODE = True
 SCORE_MINIMO = 70 
@@ -73,7 +73,6 @@ STOPWORDS_CATEGORIA = {"TUBO", "VACUTUBE", "A", "VACUO", "PARA", "COM", "DE", "D
 # =========================================================
 
 def ler_lista_desejos_txt(arquivo_txt):
-    """Lê arquivo TXT assumindo que a linha inteira é o produto, sem tentar extrair quantidades que quebram as medidas"""
     try:
         conteudo = arquivo_txt.read()
         try:
@@ -90,7 +89,7 @@ def ler_lista_desejos_txt(arquivo_txt):
                 continue
             
             linha = re.sub(r'\s+', ' ', linha).strip()
-            # FIM DO ASSASSINO DE MILILITROS: A linha inteira agora é mapeada como Produto!
+            # ASSUMINDO A LINHA INTEIRA COMO PRODUTO PARA NÃO PERDER MEDIDAS
             dados.append({"Produto": linha, "Quantidade": "1"})
         
         if not dados:
@@ -107,21 +106,19 @@ def ler_lista_desejos_txt(arquivo_txt):
 # FUNÇÕES DE NLP E EXTRAÇÃO DE ATRIBUTOS
 # =========================================================
 
-def normalizar_texto(texto):
+def normalizar_texto_basico(texto):
     texto = str(texto).upper().strip()
     texto = unicodedata.normalize('NFKD', texto)
-    texto = ''.join(c for c in texto if not unicodedata.combining(c))
-    texto = re.sub(r'[^A-Z0-9\s]', ' ', texto)
-    return re.sub(r'\s+', ' ', texto).strip()
+    return ''.join(c for c in texto if not unicodedata.combining(c))
 
 def remover_palavras_irrelevantes(texto):
     palavras_ruins = ["MARCA", "PREMIUM", "DESCARBOX", "COM", "SEM", "C/", "S/"]
     return " ".join([p for p in texto.split() if p not in palavras_ruins])
 
 def preparar_texto_match(texto):
-    texto_limpo = remover_palavras_irrelevantes(normalizar_texto(texto))
-    texto_limpo = re.sub(r'^\d+\s*', '', texto_limpo)
-    return texto_limpo
+    texto_limpo = remover_palavras_irrelevantes(normalizar_texto_basico(texto))
+    texto_limpo = re.sub(r'[^A-Z0-9\s]', ' ', texto_limpo)
+    return re.sub(r'\s+', ' ', texto_limpo).strip()
 
 def extrair_medidas(texto):
     encontradas = re.findall(r'\b\d+[\.,]?\d*\s*(?:ML|L|MG|G|KG|MM|CM)\b', texto)
@@ -129,17 +126,15 @@ def extrair_medidas(texto):
     for m in encontradas:
         m = m.replace(',', '.')
         m = re.sub(r'\s+', '', m) 
-        # Tira o zero inútil para dar match perfeito (ex: "4.0ML" vira "4ML")
         m = re.sub(r'\.0+(ML|L|MG|G|KG|MM|CM)', r'\1', m)
         normalizadas.add(m)
     return normalizadas
 
 def normalizar_produto_medico(texto):
-    """Transforma texto livre em um dicionário de atributos (Grafo de Conhecimento)"""
-    texto = normalizar_texto(texto)
+    texto = normalizar_texto_basico(texto)
     
-    # Remove lixo de caixa e pacote
-    texto = re.sub(r'\bC/\d+\b', '', texto)
+    # Remove lixo de embalagem antes de limpar a pontuação
+    texto = re.sub(r'\bC/\s*\d+\b', '', texto)
     texto = re.sub(r'\b\d+\s*UND?\b', '', texto)
     texto = re.sub(r'\bCX\s*\d+\b', '', texto)
     texto = re.sub(r'\bEMB\s*C/\d+\b', '', texto)
@@ -156,13 +151,14 @@ def normalizar_produto_medico(texto):
             
     medidas = extrair_medidas(texto)
     
+    texto_sem_pontuacao = re.sub(r'[^A-Z0-9\s]', ' ', texto)
     atributos = set()
     for grupo in ATRIBUTOS_MUTEX:
         for attr in grupo:
-            if re.search(rf'\b{attr}\b', texto):
+            if re.search(rf'\b{attr}\b', texto_sem_pontuacao):
                 atributos.add(attr)
 
-    texto_limpo = re.sub(r'\s+', ' ', texto).strip()
+    texto_limpo = re.sub(r'\s+', ' ', texto_sem_pontuacao).strip()
                 
     palavras = [p for p in texto_limpo.split() if p not in STOPWORDS_MATCH]
     palavras_fortes = [p for p in palavras if p not in STOPWORDS_CATEGORIA]
@@ -223,7 +219,7 @@ def converter_decimal_seguro(valor, default="0"):
         return Decimal(default) if default is not None else None
 
 def extrair_ipi_texto(texto):
-    texto = normalizar_texto(texto)
+    texto = normalizar_texto_basico(texto)
     match = re.search(r'IPI\s*(\d+[\,\.]?\d*)\s*%', texto)
     if match:
         return converter_decimal_seguro(match.group(1))
@@ -358,7 +354,7 @@ def identificar_colunas_inteligente(df, nome_arquivo):
                 break
 
     if DEBUG_MODE:
-        st.info(f"📄 {nome_arquivo}: Desc={col_desc} | Preço={col_preco} | Qtd={col_qtd} | IPI={col_ipi} | Total={col_total}")
+        st.info(f"📄 {nome_arquivo}: Desc={col_desc} | Preço={col_preco} | Qtd={col_qtd} | IPI={col_ipi} | Total Nativo={col_total}")
 
     return col_desc, col_preco, col_qtd, col_ipi, col_total
 
@@ -373,56 +369,70 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
         texto_desc = str(row[col_desc_nome]).strip()
         if not texto_desc or texto_desc.lower() in ["nan", "none", ""]: continue
 
-        valor_preco_raw = str(row[col_preco_nome]).strip() if col_preco_nome else ""
-        valor_preco_limpo = re.sub(r'\bC/\d+\b', '', valor_preco_raw, flags=re.IGNORECASE)
-        
-        multiplos_precos = re.findall(r'\d+[.,]\d+', valor_preco_limpo)
-        if len(multiplos_precos) >= 2: valor_preco_limpo = multiplos_precos[0]
-        elif len(multiplos_precos) == 1: valor_preco_limpo = multiplos_precos[0]
-
-        preco_unit = converter_preco(valor_preco_limpo)
-
-        if preco_unit is None:
-            texto_desc_limpo = re.sub(r'\bC/\d+\b', '', texto_desc, flags=re.IGNORECASE)
-            texto_desc_limpo = texto_desc_limpo.replace(" ", "")
-            numeros = re.findall(r'\b\d{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?\b', texto_desc_limpo)
-            if numeros:
-                preco_teste = converter_preco(numeros[-1])
-                if preco_teste:
-                    preco_unit = preco_teste
-
-        if preco_unit is None: continue
-
+        # 1. QUANTIDADE OFICIAL
         quantidade = Decimal("1")
-        qtd_encontrada_oficial = False
-        
+        qtd_oficial = False
         if col_qtd_nome and pd.notna(row[col_qtd_nome]):
             qtd_raw = str(row[col_qtd_nome]).strip()
             qtd_match = re.search(r'^(\d+[.,]?\d*)', qtd_raw)
             if qtd_match:
-                qtd_teste = converter_decimal_seguro(qtd_match.group(1), default=None)
-                if qtd_teste is not None and qtd_teste > Decimal("0"):
-                    quantidade = qtd_teste
-                    qtd_encontrada_oficial = True
+                qtd_val = converter_decimal_seguro(qtd_match.group(1), default=None)
+                if qtd_val and qtd_val > 0:
+                    quantidade = qtd_val
+                    qtd_oficial = True
 
+        # 2. EXTRAÇÃO DE PREÇOS (O NOVO MOTOR EM ARRAY QUE NÃO DELETA LINHAS)
+        linha_completa = " ".join(row.astype(str)).replace("nan", "").replace("None", "")
+        linha_completa = re.sub(r'\bC/\s*\d+\b', '', linha_completa, flags=re.IGNORECASE)
+        linha_completa = re.sub(r'\bCX\s*\d+\b', '', linha_completa, flags=re.IGNORECASE)
+        linha_completa = re.sub(r'(\d)\s+([.,]\d{2,})\b', r'\1\2', linha_completa) # Conserta o 3. 735,86
+        
+        numeros_encontrados = re.findall(r'\b\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,6})?\b', linha_completa)
+        valores_decimais = []
+        for num in numeros_encontrados:
+            val = converter_preco(num)
+            if val and val > 0:
+                valores_decimais.append(val)
+
+        preco_unit = None
+        preco_total_base = None
+
+        if col_preco_nome and pd.notna(row[col_preco_nome]):
+            preco_teste = converter_preco(str(row[col_preco_nome]))
+            if preco_teste: preco_unit = preco_teste
+            
+        if col_total_nome and pd.notna(row[col_total_nome]):
+            total_teste = converter_preco(str(row[col_total_nome]))
+            if total_teste: preco_total_base = total_teste
+
+        if not preco_unit and len(valores_decimais) >= 2:
+            n1, n2 = valores_decimais[-2], valores_decimais[-1]
+            preco_unit = min(n1, n2)
+            if not preco_total_base:
+                preco_total_base = max(n1, n2)
+        elif not preco_unit and len(valores_decimais) == 1:
+            preco_unit = valores_decimais[-1]
+
+        if preco_unit is None: continue
+
+        # 3. RECONCILIAÇÃO MATEMÁTICA
+        if not qtd_oficial and preco_total_base and preco_unit > 0:
+            div = preco_total_base / preco_unit
+            if abs(div - div.quantize(Decimal("1"))) < Decimal("0.05"):
+                quantidade = div.quantize(Decimal("1"))
+
+        total_calculado = preco_unit * quantidade
+        if preco_total_base and abs(preco_total_base - total_calculado) <= Decimal("0.05"):
+            preco_total_base = preco_total_base 
+        else:
+            preco_total_base = total_calculado 
+
+        # IPI
         ipi = Decimal("0")
         if col_ipi_nome and pd.notna(row[col_ipi_nome]):
-            ipi = converter_decimal_seguro(row[col_ipi_nome], "0")
+            ipi = converter_decimal_seguro(str(row[col_ipi_nome]), "0")
         else:
             ipi = extrair_ipi_texto(texto_desc)
-
-        preco_total_arquivo = None
-        if col_total_nome and pd.notna(row[col_total_nome]):
-            total_raw = str(row[col_total_nome]).strip()
-            total_raw = re.sub(r'\bC/\d+\b', '', total_raw, flags=re.IGNORECASE)
-            preco_total_arquivo = converter_preco(total_raw.replace(" ", ""))
-
-        if not qtd_encontrada_oficial and preco_total_arquivo and preco_unit > Decimal("0"):
-            quantidade = (preco_total_arquivo / preco_unit).quantize(Decimal("0.00"), rounding=ROUND_HALF_UP).normalize()
-
-        preco_total_base = preco_unit * quantidade
-        if preco_total_arquivo and abs(preco_total_base - preco_total_arquivo) <= Decimal("0.05"):
-            preco_total_base = preco_total_arquivo
 
         novas_descricoes.append(texto_desc)
         novos_precos.append(preco_unit)
@@ -547,7 +557,7 @@ if arquivo_cliente and arquivos_fornecedores:
                     st.stop()
 
                 df_cliente = df_cliente.dropna(subset=[col_item_cliente])
-                df_cliente["Quantidade"] = 1 # O Motor agora ignora a quantidade do cliente para os cálculos
+                df_cliente["Quantidade"] = 1
 
                 df_cliente["DICT_MATCH"] = df_cliente[col_item_cliente].astype(str).apply(normalizar_produto_medico)
 
