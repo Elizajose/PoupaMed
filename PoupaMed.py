@@ -1,5 +1,5 @@
 # =========================================================
-# V20.0 - ENGINE SEMÂNTICA: CORREÇÃO DE LEITURA DE TXT
+# V21.0 - ENGINE SEMÂNTICA: AULA DE NLP E RECONCILIAÇÃO FIXA
 # =========================================================
 
 import streamlit as st
@@ -26,7 +26,7 @@ from datetime import datetime
 # =========================================================
 
 st.set_page_config(page_title="PoupaMed", layout="wide", page_icon="🩺")
-st.success("✨ ENGINE V20.0 - PROCESSAMENTO  (NLP) ✨")
+st.success("✨ ENGINE V21.0 - NLP E EXTRAÇÃO ESTRUTURADA ✨")
 
 DEBUG_MODE = True
 
@@ -65,13 +65,13 @@ MARCAS_CONHECIDAS = [
 ]
 
 STOPWORDS_MATCH = {"KIT", "CX", "UND", "UN", "ML", "MG", "G", "L", "PCT", "PARA", "COM"}
+STOPWORDS_CATEGORIA = {"TUBO", "VACUTUBE", "A", "VACUO", "PARA", "COM", "DE", "DA", "DO", "EM", "E", "C", "S"}
 
 # =========================================================
 # FUNÇÕES DE LEITURA E ARQUIVOS
 # =========================================================
 
 def ler_lista_desejos_txt(arquivo_txt):
-    """Lê arquivo TXT com formato flexível (Recolocado na V20.1)"""
     try:
         conteudo = arquivo_txt.read()
         try:
@@ -134,7 +134,7 @@ def normalizar_produto_medico(texto):
     """Transforma texto livre em um dicionário de atributos (Grafo de Conhecimento)"""
     texto = normalizar_texto(texto)
     
-    # 1. Aplicação de Sinônimos
+    # 1. Aplicação de Sinônimos Médicos
     for padrao, sub in SINONIMOS.items():
         texto = re.sub(padrao, sub, texto)
     texto = re.sub(r'\s+', ' ', texto).strip()
@@ -155,13 +155,26 @@ def normalizar_produto_medico(texto):
         for attr in grupo:
             if re.search(rf'\b{attr}\b', texto):
                 atributos.add(attr)
+
+    # 5. Remoção de Lixo de Embalagem para o Texto Livre
+    texto_limpo = texto
+    texto_limpo = re.sub(r'\b(C/|CX|PCT|UND|UN|EMB|FR)\s*\d+\b', '', texto_limpo)
+    texto_limpo = re.sub(r'\b\d+\s*(UN|UND|ML|MG|G|L|CX|PCT|FR|RL)\b', '', texto_limpo)
+    texto_limpo = re.sub(r'\s+', ' ', texto_limpo).strip()
                 
-    # 5. Categoria Master (Primeira palavra forte)
-    palavras = [p for p in texto.split() if p not in STOPWORDS_MATCH]
-    categoria = palavras[0] if palavras else ""
+    # 6. Categoria Master (As 2 primeiras palavras fortes após Stopwords)
+    palavras = [p for p in texto_limpo.split() if p not in STOPWORDS_MATCH]
+    palavras_fortes = [p for p in palavras if p not in STOPWORDS_CATEGORIA]
+    
+    if len(palavras_fortes) >= 2:
+        categoria = f"{palavras_fortes[0]} {palavras_fortes[1]}"
+    elif len(palavras_fortes) == 1:
+        categoria = palavras_fortes[0]
+    else:
+        categoria = palavras[0] if palavras else ""
     
     return {
-        "texto_limpo": texto,
+        "texto_limpo": texto_limpo,
         "categoria": categoria,
         "marca": marca_encontrada,
         "medidas": medidas,
@@ -218,7 +231,7 @@ def extrair_ipi_texto(texto):
     return Decimal("0")
 
 # =========================================================
-# SCORE SEMÂNTICO (O NOVO CORAÇÃO DO ALGORITMO)
+# SCORE SEMÂNTICO
 # =========================================================
 
 def calcular_score_semantico(dict_cliente, dict_forn):
@@ -227,7 +240,7 @@ def calcular_score_semantico(dict_cliente, dict_forn):
         attr_c = grupo.intersection(dict_cliente["atributos"])
         attr_f = grupo.intersection(dict_forn["atributos"])
         if attr_c and attr_f and not attr_c.intersection(attr_f):
-            return 0 # Incompatibilidade direta (ex: ADULTO vs INFANTIL)
+            return 0 
             
     score = 0
     
@@ -239,7 +252,7 @@ def calcular_score_semantico(dict_cliente, dict_forn):
         if cat_fuzz > 80:
             score += (cat_fuzz * 0.4)
         else:
-            return 0 # Corta se a categoria primária for fundamentalmente diferente
+            return 0 # Punição severa para erro de categoria primária
             
     # 3. Atributos Exclusivos (Peso 20)
     if dict_cliente["atributos"]:
@@ -247,7 +260,7 @@ def calcular_score_semantico(dict_cliente, dict_forn):
         total = len(dict_cliente["atributos"])
         score += (matches / total) * 20
     else:
-        score += 20 # Bônus se o cliente for genérico
+        score += 20
         
     # 4. Medidas e Volumes (Peso 20)
     if dict_cliente["medidas"]:
@@ -255,9 +268,9 @@ def calcular_score_semantico(dict_cliente, dict_forn):
         total = len(dict_cliente["medidas"])
         score += (matches / total) * 20
     else:
-        score += 20 # Bônus se o cliente for genérico
+        score += 20
         
-    # 5. Similaridade do Texto Livre sem Marca (Peso 20)
+    # 5. Similaridade do Texto Livre Sem Embalagem/Marca (Peso 20)
     text_fuzz = fuzz.token_set_ratio(dict_cliente["texto_limpo"], dict_forn["texto_limpo"])
     score += (text_fuzz * 0.2)
     
@@ -333,7 +346,8 @@ def identificar_colunas_inteligente(df, nome_arquivo):
         if any(p in col_lower for p in ["preço", "preco", "valor", "unit"]):
             if "total" not in col_lower: 
                 col_preco = col
-        if any(p in col_lower for p in ["qtd", "quantidade"]):
+        # Ampliado com base no seu feedback:
+        if any(p in col_lower for p in ["qtd", "qtde", "quantidade", "qde", "unidades", "unidade"]):
             col_qtd = col
         if "ipi" in col_lower:
             col_ipi = col
@@ -347,7 +361,7 @@ def identificar_colunas_inteligente(df, nome_arquivo):
                 break
 
     if DEBUG_MODE:
-        st.info(f"📄 {nome_arquivo}: Desc={col_desc} | Preço={col_preco} | Qtd={col_qtd} | IPI={col_ipi} | Total Nativo={col_total}")
+        st.info(f"📄 {nome_arquivo}: Desc={col_desc} | Preço={col_preco} | Qtd={col_qtd} | IPI={col_ipi} | Total={col_total}")
 
     return col_desc, col_preco, col_qtd, col_ipi, col_total
 
@@ -408,7 +422,8 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
             if v_dec and v_dec > 0:
                 valores_decimais.append(v_dec)
                 
-        if preco_unit and preco_unit > Decimal("0"):
+        # ✅ A TRAVA DE RECONCILIAÇÃO: Se temos coluna de QTD, NÃO recalcula quantidade cegamente
+        if not col_qtd_nome and preco_unit and preco_unit > Decimal("0"):
             for val in reversed(valores_decimais):
                 divisao = val / preco_unit
                 div_round = divisao.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
@@ -424,10 +439,17 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
                 preco_total_arquivo = converter_preco(str(row[col_total_nome]).replace(" ", ""))
                 if preco_total_arquivo:
                     preco_total_base = preco_total_arquivo
-                    if preco_unit > Decimal("0"):
+                    # Só tenta derivar se não tiver coluna oficial de QTD
+                    if not col_qtd_nome and preco_unit > Decimal("0"):
                         qtd_reversa = (preco_total_base / preco_unit).quantize(Decimal("0.00"), rounding=ROUND_HALF_UP).normalize()
                         quantidade = qtd_reversa
             
+            # Se a coluna QTD existe e o valor oficial Total veio quebrado, corrigimos o Total, e não a QTD.
+            if col_qtd_nome and preco_unit:
+                calc_total = preco_unit * quantidade
+                if preco_total_base is None or abs(preco_total_base - calc_total) > Decimal("2.00"):
+                    preco_total_base = calc_total
+                    
             if preco_total_base is None:
                 preco_total_base = preco_unit * quantidade
 
@@ -630,6 +652,7 @@ if arquivo_cliente and arquivos_fornecedores:
                                 score = calcular_score_semantico(dict_cliente, dict_forn)
                                 cache_scores[chave] = score
                             
+                            # Hardcoded cutoff instead of UI slider
                             if score >= 70:
                                 candidatos.append({"linha": linha_forn, "score": score, "preco_base": linha_forn["Preço Total Base"]})
 
