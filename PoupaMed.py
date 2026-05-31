@@ -1,5 +1,5 @@
 # =========================================================
-# V28.0 - ENGINE SEMÂNTICA: BLINDAGEM RÍGIDA DE COLUNAS E QTD
+# V28.0 - ENGINE SEMÂNTICA: MATRIZ POSICIONAL E FORÇA BRUTA
 # =========================================================
 
 import streamlit as st
@@ -26,7 +26,7 @@ from datetime import datetime
 # =========================================================
 
 st.set_page_config(page_title="PoupaMed", layout="wide", page_icon="🩺")
-st.success("✨ ENGINE V28.0 - BLINDAGEM DE CÁLCULOS APLICADA ✨")
+st.success("✨ ENGINE V28.0 - MATRIZ POSICIONAL RÍGIDA ✨")
 
 DEBUG_MODE = True
 SCORE_MINIMO = 70 
@@ -163,14 +163,17 @@ def normalizar_produto_medico(texto):
     }
 
 # =========================================================
-# CONVERSÃO FINANCEIRA E MEDIDAS
+# CONVERSÃO FINANCEIRA (BLINDADA CONTRA ESPAÇOS E LETRAS)
 # =========================================================
 
 def converter_preco(valor):
     if pd.isna(valor): return None
     valor = str(valor).strip()
-    if valor in ["", "nan", "None", "NaN"]: return None
-    valor = valor.replace("R$", "").replace(" ", "")
+    
+    # Remove letras, símbolos de moeda e espaços EM BRANCO (arruma o "3. 832,50")
+    valor = re.sub(r'[A-Za-zR$\s]', '', valor)
+    if not valor: return None
+    
     try:
         if "," in valor and "." in valor:
             if valor.rfind(',') > valor.rfind('.'):
@@ -193,8 +196,8 @@ def formatar_brl(valor):
 
 def converter_decimal_seguro(valor, default="0"):
     try:
-        valor = str(valor).strip().upper().replace(" ", "")
-        valor_limpo = re.sub(r'[^0-9,\.]', '', valor)
+        valor = str(valor).strip().upper()
+        valor_limpo = re.sub(r'[A-Za-zR$\s]', '', valor)
         
         if not valor_limpo: 
             return Decimal(default) if default is not None else None
@@ -318,49 +321,38 @@ def extrair_tabela_pdf_local(arquivo_upload):
 def identificar_colunas_inteligente(df, nome_arquivo):
     col_desc = col_preco = col_qtd = col_ipi = col_total = None
 
-    # Mapeamento explícito baseado na sua imagem e regras
+    # Mapeamento normal
     for i, col in enumerate(df.columns):
         col_lower = str(col).lower()
-        col_original = str(col)
-        
-        # REGRA EXPLÍCITA: Se a primeira coluna é "Item", a segunda é Quantidade
-        if i == 0 and any(p in col_lower for p in ["item", "código", "codigo", "cód", "cod"]):
-            if len(df.columns) > 1:
-                col_qtd = df.columns[1]  # FORÇA: segunda coluna é QUANTIDADE
-                if DEBUG_MODE:
-                    st.info(f"🎯 REGRA EXPLÍCITA: Coluna '{col_qtd}' identificada como QUANTIDADE (posição 2)")
-                    
-        # Identificação normal
         if any(p in col_lower for p in ["descri", "produto", "item", "material"]):
             col_desc = col
         if not col_preco and any(p in col_lower for p in ["preço", "preco", "valor", "unit"]):
-            if "total" not in col_lower: 
-                col_preco = col
-        if not col_qtd and any(p in col_lower for p in ["qtd", "qtde", "quantidade", "quant", "qde"]):
+            if "total" not in col_lower: col_preco = col
+        if not col_qtd and any(p in col_lower for p in ["qtd", "qtde", "quantidade", "quant", "qde", "tidade", "unid"]):
             col_qtd = col
-            if DEBUG_MODE:
-                st.info(f"🎯 Coluna '{col}' identificada como QUANTIDADE por nome")
         if "ipi" in col_lower:
             col_ipi = col
         if not col_total and any(p in col_lower for p in ["preco total", "preço total", "valor total", "total"]):
             col_total = col
 
-    # FALLBACK INTELIGENTE: Se ainda não tem col_qtd, procura numérica após "Item"
-    if not col_qtd and len(df.columns) >= 2:
-        primeira_col = str(df.columns[0]).lower()
-        if any(p in primeira_col for p in ["item", "código", "codigo", "cód", "cod"]):
-            col_qtd = df.columns[1]
-            if DEBUG_MODE:
-                st.info(f"🎯 FALLBACK: Coluna '{col_qtd}' definida como QUANTIDADE (após coluna de item)")
+    # ✨ MATRIZ POSICIONAL FORÇADA: Ignora se os nomes vieram quebrados ✨
+    if len(df.columns) >= 5:
+        # Pela estrutura padrão de cotação: Col[1]=Qtd, Col[-2]=Unitário, Col[-1]=Total
+        if col_qtd is None: col_qtd = df.columns[1]
+        if col_preco is None: col_preco = df.columns[-2]
+        if col_total is None: col_total = df.columns[-1]
 
-    if not col_desc:
-        for col in df.columns:
-            if df[col].astype(str).str.len().mean() > 10:
-                col_desc = col
-                break
+        # Acha a maior coluna de texto para ser a Descrição
+        if col_desc is None:
+            max_len = 0
+            for col in df.columns[2:-2]: # Procura nas colunas do meio
+                mean_len = df[col].astype(str).str.len().mean()
+                if mean_len > max_len:
+                    max_len = mean_len
+                    col_desc = col
 
     if DEBUG_MODE:
-        st.info(f"📄 {nome_arquivo}: Desc={col_desc} | Preço={col_preco} | Qtd={col_qtd} | IPI={col_ipi} | Total={col_total}")
+        st.info(f"📄 {nome_arquivo}: Mapeamento Final -> Desc={col_desc} | Preço={col_preco} | Qtd={col_qtd} | IPI={col_ipi} | Total={col_total}")
 
     return col_desc, col_preco, col_qtd, col_ipi, col_total
 
@@ -373,93 +365,45 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
 
     for idx, row in df.iterrows():
         texto_desc = str(row[col_desc_nome]).strip()
-        if not texto_desc or texto_desc.lower() in ["nan", "none", ""]: 
-            continue
+        if not texto_desc or texto_desc.lower() in ["nan", "none", ""]: continue
 
-        # ========== EXTRAÇÃO DO PREÇO UNITÁRIO ==========
+        # Extração Implacável baseada estritamente nas colunas
         preco_unit = None
-        
-        # PRIORIDADE 1: Coluna de preço unitário explícita
-        if col_preco_nome and pd.notna(row[col_preco_nome]):
-            valor_preco_raw = str(row[col_preco_nome]).strip()
-            # Limpa apenas C/100, NÃO remove números da descrição
-            valor_preco_limpo = re.sub(r'\bC/\d+\b', '', valor_preco_raw, flags=re.IGNORECASE)
-            preco_unit = converter_preco(valor_preco_limpo)
-            
-        # PRIORIDADE 2: Extrair da última coluna de preço na linha (fallback)
-        if preco_unit is None and col_total_nome and pd.notna(row[col_total_nome]):
-            # Tenta extrair preço da coluna de total
-            total_val = converter_preco(str(row[col_total_nome]).strip())
-            if total_val and col_qtd_nome and pd.notna(row[col_qtd_nome]):
-                qtd_val = converter_decimal_seguro(str(row[col_qtd_nome]).strip(), default=None)
-                if qtd_val and qtd_val > 0:
-                    preco_unit = (total_val / qtd_val).quantize(Decimal("0.00001"), rounding=ROUND_HALF_UP)
-
-        if preco_unit is None:
-            if DEBUG_MODE:
-                st.warning(f"⚠️ Linha {idx}: Não foi possível extrair preço unitário. Descrição: {texto_desc[:50]}...")
-            continue
-
-        # ========== EXTRAÇÃO DA QUANTIDADE (BLINDADA) ==========
+        preco_total_arquivo = None
         quantidade = Decimal("1")
-        qtd_encontrada_oficial = False
         
-        # REGRA DE OURO: SÓ USA A COLUNA DE QUANTIDADE, NUNCA A DESCRIÇÃO
+        # QUANTIDADE
         if col_qtd_nome and pd.notna(row[col_qtd_nome]):
             qtd_raw = str(row[col_qtd_nome]).strip()
-            # Extrai APENAS o primeiro número encontrado (ex: "100,00" ou "100.00")
-            qtd_match = re.search(r'^(\d+[.,]?\d*)', qtd_raw)
-            if qtd_match:
-                qtd_teste = converter_decimal_seguro(qtd_match.group(1), default=None)
-                if qtd_teste is not None and qtd_teste > Decimal("0"):
-                    quantidade = qtd_teste
-                    qtd_encontrada_oficial = True
-                    # Log informativo removido para evitar excesso de dados visuais se não necessário
-                    
-        # SE NÃO TEM COLUNA DE QUANTIDADE, USA A COLUNA DE TOTAL PARA CALCULAR
-        if not qtd_encontrada_oficial and col_total_nome and pd.notna(row[col_total_nome]):
-            total_val = converter_preco(str(row[col_total_nome]).strip())
-            if total_val and preco_unit > Decimal("0"):
-                quantidade = (total_val / preco_unit).quantize(Decimal("0.00"), rounding=ROUND_HALF_UP)
-                qtd_encontrada_oficial = True
+            qtd_val = converter_decimal_seguro(qtd_raw, default=None)
+            if qtd_val and qtd_val > Decimal("0"):
+                quantidade = qtd_val
 
-        # ÚLTIMO RECURSO: Tenta extrair UND/CX da descrição (apenas se não tem coluna de quantidade)
-        if not qtd_encontrada_oficial:
-            # Procura padrões como "100 UND", "C/100", "CX 20"
-            match_und = re.search(r'(\d+)\s*(?:UND|UNIDADES?|UN)\b', texto_desc, re.IGNORECASE)
-            if match_und:
-                quantidade = Decimal(match_und.group(1))
-                qtd_encontrada_oficial = True
-            else:
-                match_cx = re.search(r'\bC/(\d+)\b', texto_desc, re.IGNORECASE)
-                if match_cx:
-                    quantidade = Decimal(match_cx.group(1))
-                    qtd_encontrada_oficial = True
-                else:
-                    match_pct = re.search(r'\bCX\s*(\d+)\b', texto_desc, re.IGNORECASE)
-                    if match_pct:
-                        quantidade = Decimal(match_pct.group(1))
-                        qtd_encontrada_oficial = True
+        # PREÇO UNITÁRIO
+        if col_preco_nome and pd.notna(row[col_preco_nome]):
+            preco_unit = converter_preco(str(row[col_preco_nome]))
 
-        # ========== IPI ==========
+        # TOTAL NATIVO
+        if col_total_nome and pd.notna(row[col_total_nome]):
+            preco_total_arquivo = converter_preco(str(row[col_total_nome]))
+
+        # Punição severa para lixo (Se não achou preço unitário ou total, descarta a linha)
+        if preco_unit is None or preco_total_arquivo is None:
+            if DEBUG_MODE: st.warning(f"⚠️ Linha ignorada por falta de matriz numérica: {texto_desc[:30]}...")
+            continue
+
+        # MATEMÁTICA PURA
+        preco_total_base = preco_unit * quantidade
+        
+        # Trava de Segurança: Se o Total da Planilha for validado pela matemática, usa ele.
+        if abs(preco_total_base - preco_total_arquivo) <= Decimal("0.05"):
+            preco_total_base = preco_total_arquivo
+        else:
+            preco_total_base = preco_total_arquivo # Força o uso do Total do PDF
+
         ipi = Decimal("0")
         if col_ipi_nome and pd.notna(row[col_ipi_nome]):
             ipi = converter_decimal_seguro(str(row[col_ipi_nome]), "0")
-        else:
-            ipi = extrair_ipi_texto(texto_desc)
-
-        # ========== TOTAL BASE ==========
-        preco_total_base = preco_unit * quantidade
-        
-        # Se tem total nativo, usa ele (mais confiável)
-        if col_total_nome and pd.notna(row[col_total_nome]):
-            total_nativo = converter_preco(str(row[col_total_nome]).strip())
-            if total_nativo:
-                # Verifica se o total nativo é consistente com o cálculo base
-                if abs(total_nativo - preco_total_base) <= Decimal("0.10") * preco_total_base:
-                    preco_total_base = total_nativo
-                elif DEBUG_MODE:
-                    st.warning(f"⚠️ Linha {idx}: Inconsistência de total! Nativo={total_nativo}, Calculado={preco_total_base}")
 
         novas_descricoes.append(texto_desc)
         novos_precos.append(preco_unit)
@@ -671,7 +615,7 @@ if arquivo_cliente and arquivos_fornecedores:
 
                             total_carrinho += subtotal_com_ipi
                             
-                            status_auditoria = "✅ Confirmado" if escolhido['score'] >= 90 else "⚠️ Revisar"
+                            status_auditoria = "✅ Confirmado" if escolhido['score'] >= 85 else "⚠️ Revisar"
 
                             itens_detalhados.append({
                                 "Status": status_auditoria,
