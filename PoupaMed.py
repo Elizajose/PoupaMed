@@ -1,5 +1,5 @@
 # =========================================================
-# V23.0 - ENGINE SEMÂNTICA: TRAVA ESPACIAL E BLINDAGEM NLP
+# V22.1 - ENGINE SEMÂNTICA E BLINDAGEM FINANCEIRA (FIX TYPE)
 # =========================================================
 
 import streamlit as st
@@ -26,7 +26,7 @@ from datetime import datetime
 # =========================================================
 
 st.set_page_config(page_title="PoupaMed", layout="wide", page_icon="🩺")
-st.success("✨ ENGINE V23.0 - TRAVA DE QUANTIDADE E NLP ✨")
+st.success("✨ ENGINE V22.1 - NLP E CÁLCULO BLINDADO ✨")
 
 DEBUG_MODE = True
 SCORE_MINIMO = 70 
@@ -141,6 +141,7 @@ def extrair_medidas(texto):
     return normalizadas
 
 def normalizar_produto_medico(texto):
+    """Transforma texto livre em um dicionário de atributos"""
     texto = normalizar_texto(texto)
     
     texto = re.sub(r'\bC/\d+\b', '', texto)
@@ -214,14 +215,18 @@ def converter_decimal_seguro(valor, default="0"):
     try:
         valor = str(valor).strip().upper().replace(" ", "")
         valor_limpo = re.sub(r'[^0-9,\.]', '', valor)
-        if not valor_limpo: return Decimal(default)
+        
+        # Correção aqui: Se não sobrou número, devolve None se o default for None
+        if not valor_limpo: 
+            return Decimal(default) if default is not None else None
+
         if "." in valor_limpo and "," in valor_limpo:
             valor_limpo = valor_limpo.replace(".", "").replace(",", ".")
         elif "," in valor_limpo:
             valor_limpo = valor_limpo.replace(",", ".")
         return Decimal(valor_limpo)
     except:
-        return Decimal(default)
+        return Decimal(default) if default is not None else None
 
 def extrair_ipi_texto(texto):
     texto = normalizar_texto(texto)
@@ -338,21 +343,15 @@ def identificar_colunas_inteligente(df, nome_arquivo):
         col_lower = str(col).lower()
         if any(p in col_lower for p in ["descri", "produto", "item", "material"]):
             col_desc = col
-        if not col_preco and any(p in col_lower for p in ["preço", "preco", "valor", "unit"]):
+        if any(p in col_lower for p in ["preço", "preco", "valor", "unit"]):
             if "total" not in col_lower: 
                 col_preco = col
-        # AQUI FOI ONDE A MÁGICA ACONTECEU: Removemos 'unidade' para não sequestrar a Quantidade
-        if not col_qtd and any(p in col_lower for p in ["qtd", "qtde", "quantidade", "quant", "qde"]):
+        if any(p in col_lower for p in ["qtd", "qtde", "quantidade", "qde", "unidades", "unidade"]):
             col_qtd = col
         if "ipi" in col_lower:
             col_ipi = col
-        if not col_total and any(p in col_lower for p in ["preco total", "preço total", "valor total", "total"]):
+        if any(p in col_lower for p in ["preco total", "preço total", "valor total", "total"]):
             col_total = col
-
-    # TRAVA ESPACIAL: Se não achou QTD por nome, mas a 1ª coluna é Item, a 2ª é obrigatoriamente a Quantidade
-    if not col_qtd and len(df.columns) >= 3:
-        if "item" in str(df.columns[0]).lower() or "cód" in str(df.columns[0]).lower():
-            col_qtd = df.columns[1]
 
     if not col_desc:
         for col in df.columns:
@@ -386,11 +385,9 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
         preco_unit = converter_preco(valor_preco_limpo)
 
         if preco_unit is None:
-            # BLINDAGEM CONTRA DESCRIÇÃO: Tira todo o lixo de ml, g, grs, un, pct antes de procurar o preço!
-            texto_limpo_numeros = re.sub(r'\b\d+[\.,]?\d*\s*(ML|L|GRS|G|MG|KG|MM|CM|UND|UN|CX|PCT)\b', '', texto_desc, flags=re.IGNORECASE)
-            texto_limpo_numeros = re.sub(r'\bC/\s*\d+\b', '', texto_limpo_numeros, flags=re.IGNORECASE)
-            
-            numeros = re.findall(r'\b\d{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?\b', texto_limpo_numeros.replace(" ", ""))
+            texto_desc_limpo = re.sub(r'\bC/\d+\b', '', texto_desc, flags=re.IGNORECASE)
+            texto_desc_limpo = texto_desc_limpo.replace(" ", "")
+            numeros = re.findall(r'\b\d{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?\b', texto_desc_limpo)
             if numeros:
                 preco_teste = converter_preco(numeros[-1])
                 if preco_teste:
@@ -398,7 +395,6 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
 
         if preco_unit is None: continue
 
-        # QUANTIDADE INTOCÁVEL: Se achou na coluna, trava e não mexe.
         quantidade = Decimal("1")
         qtd_encontrada_oficial = False
         
@@ -406,8 +402,10 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
             qtd_raw = str(row[col_qtd_nome]).strip()
             if qtd_raw and qtd_raw.lower() not in ["nan", "none"]:
                 qtd_raw = re.sub(r'[A-Za-z]', '', qtd_raw) 
-                qtd_teste = converter_decimal_seguro(qtd_raw, default=None)
-                if qtd_teste is not None and qtd_teste > 0:
+                
+                # Passando default="0" garante que não teremos mais o TypeError do NoneType
+                qtd_teste = converter_decimal_seguro(qtd_raw, default="0")
+                if qtd_teste is not None and qtd_teste > Decimal("0"):
                     quantidade = qtd_teste
                     qtd_encontrada_oficial = True
 
@@ -417,7 +415,6 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
         else:
             ipi = extrair_ipi_texto(texto_desc)
 
-        # TOTAL NATIVO E RECONCILIAÇÃO SEGURO
         preco_total_arquivo = None
         if col_total_nome and pd.notna(row[col_total_nome]):
             total_raw = str(row[col_total_nome]).strip()
@@ -427,7 +424,6 @@ def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, 
         if not qtd_encontrada_oficial and preco_total_arquivo and preco_unit > Decimal("0"):
             quantidade = (preco_total_arquivo / preco_unit).quantize(Decimal("0.00"), rounding=ROUND_HALF_UP).normalize()
 
-        # REGRA DE OURO FINANCEIRA
         preco_total_base = preco_unit * quantidade
         if preco_total_arquivo and abs(preco_total_base - preco_total_arquivo) <= Decimal("0.05"):
             preco_total_base = preco_total_arquivo
