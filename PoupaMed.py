@@ -1,5 +1,5 @@
 # =========================================================
-# V30.0 - ENGINE SEMÂNTICA: DISPATCHER E PARSERS ESPECIALIZADOS
+# V30.1 - ENGINE SEMÂNTICA: PARSERS CORRIGIDOS (ALINHAMENTO NATIVO)
 # =========================================================
 
 import streamlit as st
@@ -25,7 +25,7 @@ from datetime import datetime
 # =========================================================
 
 st.set_page_config(page_title="PoupaMed", layout="wide", page_icon="🩺")
-st.success("✨ ENGINE V30.0 - DISPATCHER E PARSERS ESPECIALIZADOS ✨")
+st.success("✨ ENGINE V30.1 - DISPATCHER E PARSERS CORRIGIDOS ✨")
 
 DEBUG_MODE = True
 SCORE_MINIMO = 70 
@@ -257,7 +257,7 @@ def validar_matematica_e_padronizar(df):
     """
     if df is None or df.empty: return pd.DataFrame()
     
-    # Remove lixo
+    # Remove as linhas que não tem preço unitário e total válidos
     df = df.dropna(subset=['Preço Unitário', 'Preço Total Base'])
     df = df[df['Preço Unitário'].notna() & df['Preço Total Base'].notna()]
     if df.empty: return pd.DataFrame()
@@ -281,7 +281,7 @@ def validar_matematica_e_padronizar(df):
     return df
 
 # =========================================================
-# PARSERS ESPECIALIZADOS POR FORNECEDOR
+# PARSERS ESPECIALIZADOS POR FORNECEDOR (O SEGREDO ESTÁ AQUI)
 # =========================================================
 
 def extrator_prevena(pdf):
@@ -289,30 +289,24 @@ def extrator_prevena(pdf):
     item_atual = None
     
     for pagina in pdf.pages:
-        tabelas = pagina.extract_tables(table_settings={"vertical_strategy": "text", "horizontal_strategy": "text"})
+        tabelas = pagina.extract_tables() # EXTRAÇÃO DEFAULT NATIVA
+        if not tabelas: continue
         for tabela in tabelas:
             for linha in tabela:
                 linha = [str(c).replace('\n', ' ').strip() if c else "" for c in linha]
                 if not any(linha): continue
                 
-                # Assinatura de Início de Linha (Filial começa com REC ou BRA)
                 if re.match(r'^(REC|BRA)', linha[0], re.IGNORECASE):
                     if item_atual: itens.append(item_atual)
                     
-                    desc = linha[2] if len(linha) > 2 else ""
-                    qtd_raw = linha[4] if len(linha) > 4 else "1"
-                    preco_raw = linha[5] if len(linha) > 5 else "0"
-                    total_raw = linha[7] if len(linha) > 7 else "0"
-                    
                     item_atual = {
-                        "Descrição Limpa": desc,
-                        "Quantidade Fornecedor": extrair_quantidade_real(qtd_raw),
-                        "Preço Unitário": converter_preco(preco_raw),
-                        "Preço Total Base": converter_preco(total_raw),
+                        "Descrição Limpa": linha[2] if len(linha) > 2 else "",
+                        "Quantidade Fornecedor": extrair_quantidade_real(linha[4] if len(linha) > 4 else "1"),
+                        "Preço Unitário": converter_preco(linha[5] if len(linha) > 5 else "0"),
+                        "Preço Total Base": converter_preco(linha[7] if len(linha) > 7 else "0"),
                         "IPI": Decimal("0")
                     }
                 else:
-                    # Costura (Adiciona quebras à descrição do item_atual)
                     if item_atual and len(linha) > 2:
                         item_atual["Descrição Limpa"] += " " + linha[2]
                         
@@ -324,31 +318,25 @@ def extrator_biocon(pdf):
     item_atual = None
     
     for pagina in pdf.pages:
-        tabelas = pagina.extract_tables(table_settings={"vertical_strategy": "text", "horizontal_strategy": "text"})
+        tabelas = pagina.extract_tables() # EXTRAÇÃO DEFAULT NATIVA
+        if not tabelas: continue
         for tabela in tabelas:
             for linha in tabela:
                 linha = [str(c).replace('\n', ' ').strip() if c else "" for c in linha]
                 if not any(linha): continue
                 
-                # Assinatura de Início (Código numérico na Coluna 0)
                 if re.match(r'^\d+$', linha[0]):
                     if item_atual: itens.append(item_atual)
                     
-                    qtd_raw = linha[1] if len(linha) > 1 else "1"
-                    desc = linha[2] if len(linha) > 2 else ""
-                    preco_raw = linha[4] if len(linha) > 4 else "0"
-                    total_raw = linha[5] if len(linha) > 5 else "0"
-                    
                     item_atual = {
-                        "Descrição Limpa": desc,
-                        "Quantidade Fornecedor": extrair_quantidade_real(qtd_raw),
-                        "Preço Unitário": converter_preco(preco_raw),
-                        "Preço Total Base": converter_preco(total_raw),
+                        "Descrição Limpa": linha[2] if len(linha) > 2 else "",
+                        "Quantidade Fornecedor": extrair_quantidade_real(linha[1] if len(linha) > 1 else "1"),
+                        "Preço Unitário": converter_preco(linha[4] if len(linha) > 4 else "0"),
+                        "Preço Total Base": converter_preco(linha[5] if len(linha) > 5 else "0"),
                         "IPI": Decimal("0")
                     }
                 else:
-                    if item_atual and len(linha) > 0:
-                        # Pega os textos que sobraram e costura
+                    if item_atual:
                         textos_extras = [x for x in linha if x and not re.match(r'^[\d\.,]+$', x)]
                         if textos_extras:
                             item_atual["Descrição Limpa"] += " " + " ".join(textos_extras)
@@ -361,30 +349,25 @@ def extrator_centervida(pdf):
     item_atual = None
     
     for pagina in pdf.pages:
-        tabelas = pagina.extract_tables(table_settings={"vertical_strategy": "text", "horizontal_strategy": "text"})
+        tabelas = pagina.extract_tables() # EXTRAÇÃO DEFAULT NATIVA
+        if not tabelas: continue
         for tabela in tabelas:
             for linha in tabela:
                 linha = [str(c).replace('\n', ' ').strip() if c else "" for c in linha]
                 if not any(linha): continue
                 
-                # Assinatura de Início (Código numérico na Coluna 0)
                 if re.match(r'^\d+$', linha[0]):
                     if item_atual: itens.append(item_atual)
                     
-                    qtd_raw = linha[1] if len(linha) > 1 else "1"
-                    desc = linha[2] if len(linha) > 2 else ""
-                    preco_raw = linha[3] if len(linha) > 3 else "0"
-                    total_raw = linha[4] if len(linha) > 4 else "0"
-                    
                     item_atual = {
-                        "Descrição Limpa": desc,
-                        "Quantidade Fornecedor": extrair_quantidade_real(qtd_raw),
-                        "Preço Unitário": converter_preco(preco_raw),
-                        "Preço Total Base": converter_preco(total_raw),
-                        "IPI": Decimal("0")
+                        "Descrição Limpa": linha[2] if len(linha) > 2 else "",
+                        "Quantidade Fornecedor": extrair_quantidade_real(linha[1] if len(linha) > 1 else "1"),
+                        "Preço Unitário": converter_preco(linha[3] if len(linha) > 3 else "0"),
+                        "Preço Total Base": converter_preco(linha[4] if len(linha) > 4 else "0"),
+                        "IPI": converter_decimal_seguro(linha[5] if len(linha) > 5 else "0")
                     }
                 else:
-                    if item_atual and len(linha) > 0:
+                    if item_atual:
                         textos_extras = [x for x in linha if x and not re.match(r'^[\d\.,]+$', x)]
                         if textos_extras:
                             item_atual["Descrição Limpa"] += " " + " ".join(textos_extras)
@@ -436,7 +419,6 @@ def extrator_generico_forca_bruta(pdf, nome_arquivo):
     df.columns = colunas_tratadas
     df = df.iloc[idx_cabecalho+1:].reset_index(drop=True)
     
-    # Identificação de colunas para o genérico
     col_desc = col_preco = col_qtd = col_ipi = col_total = None
     for col in df.columns:
         col_lower = str(col).lower()
@@ -497,8 +479,8 @@ def roteador_e_extrator_pdf(arquivo_upload, nome_fornecedor):
             if len(pdf.pages) > 0:
                 texto_identificacao = str(pdf.pages[0].extract_text()).upper()
                 
-            # Assinatura: Prevena
-            if "PREÇO DA SUBUNIDADE" in texto_identificacao or "FILIAL VENDA" in texto_identificacao or "PREVENA" in texto_identificacao:
+            # Assinatura: Prevena (RESTAURADA)
+            if "VIVEO" in texto_identificacao or "PREVENA" in texto_identificacao or "SUBUNIDADE" in texto_identificacao:
                 if DEBUG_MODE: st.info(f"🎯 Layout Especializado: PREVENA ({arquivo_upload.name})")
                 return extrator_prevena(pdf)
                 
