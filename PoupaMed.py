@@ -1,5 +1,5 @@
 # =========================================================
-# V29.1 - ENGINE SEMÂNTICA: ROTEAMENTO CORRIGIDO E FALLBACK REAL
+# V29.2 - ENGINE SEMÂNTICA: ROTEAMENTO PREVENA, BIOCON E CENTERVIDA
 # =========================================================
 
 import streamlit as st
@@ -25,7 +25,7 @@ from datetime import datetime
 # =========================================================
 
 st.set_page_config(page_title="PoupaMed", layout="wide", page_icon="🩺")
-st.success("✨ ENGINE V29.1 - ROTEAMENTO DE LAYOUT E TRAVA DE MEDIDAS ✨")
+st.success("✨ ENGINE V29.2 - ROTEADORES: PREVENA, BIOCON E CENTERVIDA ✨")
 
 DEBUG_MODE = True
 SCORE_MINIMO = 70 
@@ -262,7 +262,6 @@ def calcular_score_semantico(dict_cliente, dict_forn):
 def parse_pdf_prevena(pdf):
     todas_linhas = []
     for pagina in pdf.pages:
-        # APLICANDO AS SETTINGS PODEROSAS DE EXTRAÇÃO
         tabelas = pagina.extract_tables(table_settings={"vertical_strategy": "text", "horizontal_strategy": "text"})
         if tabelas:
             for tabela in tabelas:
@@ -271,7 +270,8 @@ def parse_pdf_prevena(pdf):
                     if any(linha_limpa): todas_linhas.append(linha_limpa)
                     
     df = pd.DataFrame(todas_linhas)
-    col_desc, col_qtd, col_preco, col_total = 2, 4, 6, 7 
+    # Índices CORRIGIDOS para lidar com a fusão de colunas do PDFPlumber
+    col_desc, col_qtd, col_preco, col_total = 2, 4, 5, 7 
     return df, col_desc, col_preco, col_qtd, None, col_total
 
 def parse_pdf_biocon(pdf):
@@ -297,6 +297,32 @@ def parse_pdf_biocon(pdf):
     col_desc, col_qtd, col_preco, col_total = 4, 1, 5, 6
     return df, col_desc, col_preco, col_qtd, None, col_total
 
+def parse_pdf_centervida(pdf):
+    todas_linhas = []
+    for pagina in pdf.pages:
+        tabelas = pagina.extract_tables(table_settings={"vertical_strategy": "text", "horizontal_strategy": "text"})
+        if tabelas:
+            for tabela in tabelas:
+                linha_atual = []
+                for linha in tabela:
+                    linha_limpa = [str(c).replace('\n', ' ').strip() if c else "" for c in linha]
+                    if not any(linha_limpa): continue
+                    
+                    # Centervida quebra descrições, mas sempre começa com o Item (0001, 0002)
+                    if re.match(r'^\d+$', linha_limpa[0]): 
+                        if linha_atual: todas_linhas.append(linha_atual)
+                        linha_atual = linha_limpa
+                    else:
+                        # Puxa o texto da linha extra para a descrição (coluna 4)
+                        if linha_atual and len(linha_limpa) > 4:
+                            linha_atual[4] += " " + linha_limpa[4] 
+                if linha_atual: todas_linhas.append(linha_atual)
+                
+    df = pd.DataFrame(todas_linhas)
+    # Índices com base no layout: Qtd=1, Desc=4, Unit=5, Total=6, IPI=7
+    col_desc, col_qtd, col_preco, col_total, col_ipi = 4, 1, 5, 6, 7
+    return df, col_desc, col_preco, col_qtd, col_ipi, col_total
+
 @st.cache_data
 def roteador_e_extrator_pdf(arquivo_upload):
     try:
@@ -314,9 +340,13 @@ def roteador_e_extrator_pdf(arquivo_upload):
                 if DEBUG_MODE: st.info(f"🔄 Layout Detectado: BIOCON ({arquivo_upload.name})")
                 return parse_pdf_biocon(pdf)
                 
+            elif "CENTERVIDA" in texto_identificacao or "PARANHOS" in texto_identificacao:
+                if DEBUG_MODE: st.info(f"🔄 Layout Detectado: CENTERVIDA ({arquivo_upload.name})")
+                return parse_pdf_centervida(pdf)
+                
             else:
                 if DEBUG_MODE: st.info(f"🔄 Layout Desconhecido ({arquivo_upload.name}): Acionando fallback real...")
-                return None, None, None, None, None, None # Força o retorno Nulo para acionar a Força Bruta
+                return None, None, None, None, None, None 
     except Exception as e:
         return None, None, None, None, None, None
 
