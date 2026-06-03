@@ -1,5 +1,5 @@
 # =========================================================
-# V29.0 - ENGINE SEMÂNTICA: ROTEAMENTO DE LAYOUT E TRAVA DE MEDIDAS
+# V29.1 - ENGINE SEMÂNTICA: ROTEAMENTO CORRIGIDO E FALLBACK REAL
 # =========================================================
 
 import streamlit as st
@@ -25,7 +25,7 @@ from datetime import datetime
 # =========================================================
 
 st.set_page_config(page_title="PoupaMed", layout="wide", page_icon="🩺")
-st.success("✨ ENGINE V29.0 - ROTEAMENTO DE LAYOUT E TRAVA DE MEDIDAS ✨")
+st.success("✨ ENGINE V29.1 - ROTEAMENTO DE LAYOUT E TRAVA DE MEDIDAS ✨")
 
 DEBUG_MODE = True
 SCORE_MINIMO = 70 
@@ -74,7 +74,7 @@ STOPWORDS_MATCH = {"KIT", "CX", "UND", "UN", "ML", "MG", "G", "L", "PCT", "PARA"
 STOPWORDS_CATEGORIA = {"TUBO", "VACUTUBE", "A", "VACUO", "PARA", "COM", "DE", "DA", "DO", "EM", "E", "C", "S", "COLETOR"}
 
 # =========================================================
-# FUNÇÕES DE LEITURA E ARQUIVOS (MANTIDAS DA V28)
+# FUNÇÕES DE LEITURA E ARQUIVOS 
 # =========================================================
 
 def ler_lista_desejos_txt(arquivo_txt):
@@ -90,18 +90,14 @@ def ler_lista_desejos_txt(arquivo_txt):
         
         for linha in linhas:
             linha = linha.strip()
-            if not linha or linha.startswith('#') or linha.startswith('//'):
-                continue
-            
+            if not linha or linha.startswith('#') or linha.startswith('//'): continue
             linha = re.sub(r'\s+', ' ', linha).strip()
             dados.append({"Produto": linha, "Quantidade": "1"})
         
         if not dados:
             st.error("Nenhum item válido encontrado no arquivo TXT")
             return None
-            
         return pd.DataFrame(dados)
-        
     except Exception as e:
         st.error(f"Erro ao ler arquivo TXT: {e}")
         return None
@@ -127,7 +123,6 @@ def extrair_medidas(texto):
 
 def normalizar_produto_medico(texto):
     texto = normalizar_texto_basico(texto)
-    
     texto = re.sub(r'\bC/\s*\d+\b', '', texto)
     texto = re.sub(r'\b\d+\s*UND?\b', '', texto)
     texto = re.sub(r'\bCX\s*\d+\b', '', texto)
@@ -144,7 +139,6 @@ def normalizar_produto_medico(texto):
             texto = re.sub(rf'\b{marca}\b', '', texto).strip()
             
     medidas = extrair_medidas(texto)
-    
     texto_sem_pontuacao = re.sub(r'[^A-Z0-9\s]', ' ', texto)
     atributos = set()
     for grupo in ATRIBUTOS_MUTEX:
@@ -268,7 +262,8 @@ def calcular_score_semantico(dict_cliente, dict_forn):
 def parse_pdf_prevena(pdf):
     todas_linhas = []
     for pagina in pdf.pages:
-        tabelas = pagina.extract_tables()
+        # APLICANDO AS SETTINGS PODEROSAS DE EXTRAÇÃO
+        tabelas = pagina.extract_tables(table_settings={"vertical_strategy": "text", "horizontal_strategy": "text"})
         if tabelas:
             for tabela in tabelas:
                 for linha in tabela:
@@ -282,7 +277,7 @@ def parse_pdf_prevena(pdf):
 def parse_pdf_biocon(pdf):
     todas_linhas = []
     for pagina in pdf.pages:
-        tabelas = pagina.extract_tables()
+        tabelas = pagina.extract_tables(table_settings={"vertical_strategy": "text", "horizontal_strategy": "text"})
         if tabelas:
             for tabela in tabelas:
                 linha_atual = []
@@ -307,7 +302,6 @@ def roteador_e_extrator_pdf(arquivo_upload):
     try:
         arquivo_upload.seek(0)
         texto_identificacao = ""
-        
         with pdfplumber.open(arquivo_upload) as pdf:
             if len(pdf.pages) > 0:
                 texto_identificacao = str(pdf.pages[0].extract_text()).upper()
@@ -321,14 +315,13 @@ def roteador_e_extrator_pdf(arquivo_upload):
                 return parse_pdf_biocon(pdf)
                 
             else:
-                if DEBUG_MODE: st.info(f"🔄 Layout Desconhecido ({arquivo_upload.name}): Falhando graciosamente para força bruta.")
-                return pd.DataFrame(), None, None, None, None, None 
+                if DEBUG_MODE: st.info(f"🔄 Layout Desconhecido ({arquivo_upload.name}): Acionando fallback real...")
+                return None, None, None, None, None, None # Força o retorno Nulo para acionar a Força Bruta
     except Exception as e:
-        return pd.DataFrame(), None, None, None, None, None
+        return None, None, None, None, None, None
 
 def limpar_tabela_padronizada(df, col_desc, col_preco, col_qtd, col_ipi, col_total):
     novas_descricoes, novos_precos, novas_qtds, novos_ipis, novos_totais_base = [], [], [], [], []
-
     for idx, row in df.iterrows():
         try:
             if col_desc >= len(row): continue
@@ -343,7 +336,6 @@ def limpar_tabela_padronizada(df, col_desc, col_preco, col_qtd, col_ipi, col_tot
             if preco_unit is None or preco_total_arquivo is None: continue
 
             preco_total_base = preco_unit * quantidade
-            
             if abs(preco_total_base - preco_total_arquivo) <= Decimal("0.05"):
                 preco_total_base = preco_total_arquivo 
             else:
@@ -367,8 +359,59 @@ def limpar_tabela_padronizada(df, col_desc, col_preco, col_qtd, col_ipi, col_tot
     })
 
 # =========================================================
-# FALLBACK PLANILHAS (EXCEL/CSV DA V28)
+# FALLBACK PLANILHAS E PDFS DESCONHECIDOS (FORÇA BRUTA)
 # =========================================================
+
+@st.cache_data
+def extrair_tabela_pdf_local(arquivo_upload):
+    try:
+        todas_linhas = []
+        arquivo_upload.seek(0)
+        with pdfplumber.open(arquivo_upload) as pdf:
+            for pagina in pdf.pages:
+                for estrategia in ["text", "lines", "decimals"]:
+                    tabelas = pagina.extract_tables(table_settings={
+                        "vertical_strategy": estrategia, 
+                        "horizontal_strategy": "text"
+                    })
+                    if tabelas:
+                        for tabela in tabelas:
+                            for linha in tabela:
+                                linha_limpa = [str(celula).replace('\n', ' ').strip() if celula else "" for celula in linha]
+                                if any(linha_limpa) and len(linha_limpa) >= 2:
+                                    todas_linhas.append(linha_limpa)
+                        break
+
+        if not todas_linhas: return None
+        
+        df = pd.DataFrame(todas_linhas)
+        df = df.drop_duplicates().reset_index(drop=True)
+        
+        idx_cabecalho = -1
+        for i, row in df.iterrows():
+            linha_str = " ".join(row.astype(str)).lower()
+            if any(palavra in linha_str for palavra in ["descri", "produto", "item", "código", "codigo"]):
+                idx_cabecalho = i
+                break
+        
+        if idx_cabecalho == -1: return df
+        
+        colunas_brutas = df.iloc[idx_cabecalho].astype(str).str.strip().tolist()
+        colunas_tratadas = []
+        contagem = {}
+        for col in colunas_brutas:
+            if not col or col.lower() in ["none", "nan", ""]: col = "COLUNA_VAZIA"
+            if col in contagem:
+                contagem[col] += 1
+                colunas_tratadas.append(f"{col}_{contagem[col]}")
+            else:
+                contagem[col] = 0
+                colunas_tratadas.append(col)
+                
+        df.columns = colunas_tratadas
+        return df.iloc[idx_cabecalho+1:].reset_index(drop=True)
+    except Exception as e:
+        return None
 
 def identificar_colunas_inteligente(df, nome_arquivo):
     col_desc = col_preco = col_qtd = col_ipi = col_total = None
@@ -566,8 +609,19 @@ if arquivo_cliente and arquivos_fornecedores:
 
                     if arq.name.endswith(".pdf"):
                         df_bruto, c_desc, c_preco, c_qtd, c_ipi, c_total = roteador_e_extrator_pdf(arq)
+                        
+                        # NOVO FLUXO: Se o roteador retornar dados, usa o parser específico.
                         if df_bruto is not None and not df_bruto.empty:
                             df_forn_processado = limpar_tabela_padronizada(df_bruto, c_desc, c_preco, c_qtd, c_ipi, c_total)
+                        else:
+                            # 🚀 SE O ROTEADOR NÃO ACHOU (OU FALHOU), ACIONA A FORÇA BRUTA AQUI!
+                            if DEBUG_MODE: st.info(f"🔄 Executando extração por força bruta no arquivo: {arq.name}")
+                            df_bruto = extrair_tabela_pdf_local(arq)
+                            if df_bruto is not None and not df_bruto.empty:
+                                colunas = identificar_colunas_inteligente(df_bruto, nome_fornecedor)
+                                if colunas[0]:
+                                    df_forn_processado = limpar_tabela_hibrida(df_bruto, *colunas, nome_fornecedor)
+
                     elif arq.name.endswith(".xlsx"):
                         df_forn = pd.read_excel(arq)
                         df_forn.columns = df_forn.columns.astype(str).str.strip()
@@ -585,7 +639,9 @@ if arquivo_cliente and arquivos_fornecedores:
                         if colunas[0]:
                             df_forn_processado = limpar_tabela_hibrida(df_forn, *colunas, nome_fornecedor)
 
-                    if df_forn_processado is None or len(df_forn_processado) == 0: continue
+                    if df_forn_processado is None or len(df_forn_processado) == 0: 
+                        if DEBUG_MODE: st.warning(f"❌ Nenhum item válido extraído de {arq.name}. Tabela descartada.")
+                        continue
                     
                     indice_fornecedor = criar_indice_fornecedor(df_forn_processado)
 
