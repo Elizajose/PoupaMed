@@ -1,5 +1,5 @@
 # =========================================================
-# V29.3 - ENGINE SEMÂNTICA: FORÇA BRUTA SUPERCHARGED E COSTURA DE LINHAS
+# V30.0 - ENGINE SEMÂNTICA: DISPATCHER E PARSERS ESPECIALIZADOS
 # =========================================================
 
 import streamlit as st
@@ -25,7 +25,7 @@ from datetime import datetime
 # =========================================================
 
 st.set_page_config(page_title="PoupaMed", layout="wide", page_icon="🩺")
-st.success("✨ ENGINE V29.3 - FORÇA BRUTA DINÂMICA E COSTURA DE LINHAS ✨")
+st.success("✨ ENGINE V30.0 - DISPATCHER E PARSERS ESPECIALIZADOS ✨")
 
 DEBUG_MODE = True
 SCORE_MINIMO = 70 
@@ -74,7 +74,7 @@ STOPWORDS_MATCH = {"KIT", "CX", "UND", "UN", "ML", "MG", "G", "L", "PCT", "PARA"
 STOPWORDS_CATEGORIA = {"TUBO", "VACUTUBE", "A", "VACUO", "PARA", "COM", "DE", "DA", "DO", "EM", "E", "C", "S", "COLETOR"}
 
 # =========================================================
-# FUNÇÕES DE LEITURA E ARQUIVOS 
+# FUNÇÕES CORE: CONVERSÃO E NLP
 # =========================================================
 
 def ler_lista_desejos_txt(arquivo_txt):
@@ -93,17 +93,10 @@ def ler_lista_desejos_txt(arquivo_txt):
             linha = re.sub(r'\s+', ' ', linha).strip()
             dados.append({"Produto": linha, "Quantidade": "1"})
         
-        if not dados:
-            st.error("Nenhum item válido encontrado no arquivo TXT")
-            return None
-        return pd.DataFrame(dados)
+        return pd.DataFrame(dados) if dados else None
     except Exception as e:
         st.error(f"Erro ao ler arquivo TXT: {e}")
         return None
-
-# =========================================================
-# NLP E EXTRAÇÃO
-# =========================================================
 
 def normalizar_texto_basico(texto):
     texto = str(texto).upper().strip()
@@ -188,12 +181,6 @@ def converter_preco(valor):
     except:
         return None
 
-def formatar_brl(valor):
-    if valor is None: valor = Decimal("0")
-    valor = valor.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-    valor_str = f"{valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    return f"R$ {valor_str}"
-
 def converter_decimal_seguro(valor, default="0"):
     try:
         valor = str(valor).strip().upper()
@@ -210,42 +197,48 @@ def converter_decimal_seguro(valor, default="0"):
     except:
         return Decimal(default) if default is not None else None
 
-# =========================================================
-# SCORE SEMÂNTICO V29
-# =========================================================
+def extrair_quantidade_real(texto):
+    """
+    Resolve o bug crítico de colunas fundidas:
+    Transforma "40,00 UND 556" -> Captura "40,00" -> Retorna Decimal("40.00")
+    """
+    match = re.search(r'^\s*(\d+(?:[\.,]\d+)?)', str(texto))
+    if match:
+        return converter_decimal_seguro(match.group(1))
+    return Decimal("1")
+
+def formatar_brl(valor):
+    if valor is None: valor = Decimal("0")
+    valor = valor.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    valor_str = f"{valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    return f"R$ {valor_str}"
 
 def calcular_score_semantico(dict_cliente, dict_forn):
     if dict_cliente["medidas"] and dict_forn["medidas"]:
-        if not dict_cliente["medidas"].intersection(dict_forn["medidas"]):
-            return 0
+        if not dict_cliente["medidas"].intersection(dict_forn["medidas"]): return 0
             
     for grupo in ATRIBUTOS_MUTEX:
         attr_c = grupo.intersection(dict_cliente["atributos"])
         attr_f = grupo.intersection(dict_forn["atributos"])
-        if attr_c and attr_f and not attr_c.intersection(attr_f):
-            return 0 
+        if attr_c and attr_f and not attr_c.intersection(attr_f): return 0 
             
     score = 0
     if dict_cliente["categoria"] and dict_cliente["categoria"] == dict_forn["categoria"]:
         score += 40
     else:
         cat_fuzz = fuzz.ratio(dict_cliente["categoria"], dict_forn["categoria"])
-        if cat_fuzz > 80:
-            score += (cat_fuzz * 0.4)
-        else:
-            return 0 
+        if cat_fuzz > 80: score += (cat_fuzz * 0.4)
+        else: return 0 
             
     if dict_cliente["atributos"]:
         matches = len(dict_cliente["atributos"].intersection(dict_forn["atributos"]))
-        total = len(dict_cliente["atributos"])
-        score += (matches / total) * 20
+        score += (matches / len(dict_cliente["atributos"])) * 20
     else:
         score += 20
         
     if dict_cliente["medidas"]:
         matches = len(dict_cliente["medidas"].intersection(dict_forn["medidas"]))
-        total = len(dict_cliente["medidas"])
-        score += (matches / total) * 20
+        score += (matches / len(dict_cliente["medidas"])) * 20
     else:
         score += 20
         
@@ -254,80 +247,206 @@ def calcular_score_semantico(dict_cliente, dict_forn):
     return score
 
 # =========================================================
-# FORÇA BRUTA SUPERCHARGED (SUBSTITUI OS PARSERS FIXOS)
+# FÁBRICA DE DATAFRAMES (PADRONIZAÇÃO FINAL)
 # =========================================================
 
-@st.cache_data
-def extrair_tabela_pdf_local(arquivo_upload):
-    try:
-        todas_linhas = []
-        arquivo_upload.seek(0)
-        with pdfplumber.open(arquivo_upload) as pdf:
-            for pagina in pdf.pages:
-                for estrategia in ["text", "lines", "decimals"]:
-                    tabelas = pagina.extract_tables(table_settings={
-                        "vertical_strategy": estrategia, 
-                        "horizontal_strategy": "text"
-                    })
-                    if tabelas:
-                        extraiu_algo = False
-                        for tabela in tabelas:
-                            for linha in tabela:
-                                linha_limpa = [str(celula).replace('\n', ' ').strip() if celula else "" for celula in linha]
-                                if any(linha_limpa) and len(linha_limpa) >= 2:
-                                    todas_linhas.append(linha_limpa)
-                                    extraiu_algo = True
-                        if extraiu_algo: break # Se achou colunas validas, ignora o resto das estrategias pra essa pagina
-
-        if not todas_linhas: return None
-        
-        df = pd.DataFrame(todas_linhas)
-        df = df.drop_duplicates().reset_index(drop=True)
-        
-        idx_cabecalho = -1
-        for i, row in df.iterrows():
-            linha_str = " ".join(row.astype(str)).lower()
-            if any(palavra in linha_str for palavra in ["descri", "produto", "item", "código", "codigo", "filial venda"]):
-                idx_cabecalho = i
-                break
-        
-        if idx_cabecalho == -1: return df
-        
-        colunas_brutas = df.iloc[idx_cabecalho].astype(str).str.strip().tolist()
-        colunas_tratadas = []
-        contagem = {}
-        for col in colunas_brutas:
-            if not col or col.lower() in ["none", "nan", ""]: col = "COLUNA_VAZIA"
-            if col in contagem:
-                contagem[col] += 1
-                colunas_tratadas.append(f"{col}_{contagem[col]}")
-            else:
-                contagem[col] = 0
-                colunas_tratadas.append(col)
-                
-        df.columns = colunas_tratadas
-        return df.iloc[idx_cabecalho+1:].reset_index(drop=True)
-    except Exception as e:
-        return None
-
-def identificar_colunas_inteligente(df, nome_arquivo):
-    col_desc = col_preco = col_qtd = col_ipi = col_total = None
+def validar_matematica_e_padronizar(df):
+    """
+    Recebe um DataFrame sujo de qualquer Parser, limpa, corrige a matemática
+    e devolve o padrão ouro para a Engine Semântica.
+    """
+    if df is None or df.empty: return pd.DataFrame()
     
+    # Remove lixo
+    df = df.dropna(subset=['Preço Unitário', 'Preço Total Base'])
+    df = df[df['Preço Unitário'].notna() & df['Preço Total Base'].notna()]
+    if df.empty: return pd.DataFrame()
+    
+    novos_totais = []
+    descricoes_limpas = []
+    
+    for _, row in df.iterrows():
+        calc_base = row['Preço Unitário'] * row['Quantidade Fornecedor']
+        if abs(calc_base - row['Preço Total Base']) <= Decimal("0.05"):
+            novos_totais.append(row['Preço Total Base'])
+        else:
+            novos_totais.append(calc_base) # Força matemática pura
+            
+        descricoes_limpas.append(str(row['Descrição Limpa']).strip())
+            
+    df['Preço Total Base'] = novos_totais
+    df['Descrição Limpa'] = descricoes_limpas
+    df["DICT_MATCH"] = df["Descrição Limpa"].apply(normalizar_produto_medico)
+    
+    return df
+
+# =========================================================
+# PARSERS ESPECIALIZADOS POR FORNECEDOR
+# =========================================================
+
+def extrator_prevena(pdf):
+    itens = []
+    item_atual = None
+    
+    for pagina in pdf.pages:
+        tabelas = pagina.extract_tables(table_settings={"vertical_strategy": "text", "horizontal_strategy": "text"})
+        for tabela in tabelas:
+            for linha in tabela:
+                linha = [str(c).replace('\n', ' ').strip() if c else "" for c in linha]
+                if not any(linha): continue
+                
+                # Assinatura de Início de Linha (Filial começa com REC ou BRA)
+                if re.match(r'^(REC|BRA)', linha[0], re.IGNORECASE):
+                    if item_atual: itens.append(item_atual)
+                    
+                    desc = linha[2] if len(linha) > 2 else ""
+                    qtd_raw = linha[4] if len(linha) > 4 else "1"
+                    preco_raw = linha[5] if len(linha) > 5 else "0"
+                    total_raw = linha[7] if len(linha) > 7 else "0"
+                    
+                    item_atual = {
+                        "Descrição Limpa": desc,
+                        "Quantidade Fornecedor": extrair_quantidade_real(qtd_raw),
+                        "Preço Unitário": converter_preco(preco_raw),
+                        "Preço Total Base": converter_preco(total_raw),
+                        "IPI": Decimal("0")
+                    }
+                else:
+                    # Costura (Adiciona quebras à descrição do item_atual)
+                    if item_atual and len(linha) > 2:
+                        item_atual["Descrição Limpa"] += " " + linha[2]
+                        
+    if item_atual: itens.append(item_atual)
+    return validar_matematica_e_padronizar(pd.DataFrame(itens))
+
+def extrator_biocon(pdf):
+    itens = []
+    item_atual = None
+    
+    for pagina in pdf.pages:
+        tabelas = pagina.extract_tables(table_settings={"vertical_strategy": "text", "horizontal_strategy": "text"})
+        for tabela in tabelas:
+            for linha in tabela:
+                linha = [str(c).replace('\n', ' ').strip() if c else "" for c in linha]
+                if not any(linha): continue
+                
+                # Assinatura de Início (Código numérico na Coluna 0)
+                if re.match(r'^\d+$', linha[0]):
+                    if item_atual: itens.append(item_atual)
+                    
+                    qtd_raw = linha[1] if len(linha) > 1 else "1"
+                    desc = linha[2] if len(linha) > 2 else ""
+                    preco_raw = linha[4] if len(linha) > 4 else "0"
+                    total_raw = linha[5] if len(linha) > 5 else "0"
+                    
+                    item_atual = {
+                        "Descrição Limpa": desc,
+                        "Quantidade Fornecedor": extrair_quantidade_real(qtd_raw),
+                        "Preço Unitário": converter_preco(preco_raw),
+                        "Preço Total Base": converter_preco(total_raw),
+                        "IPI": Decimal("0")
+                    }
+                else:
+                    if item_atual and len(linha) > 0:
+                        # Pega os textos que sobraram e costura
+                        textos_extras = [x for x in linha if x and not re.match(r'^[\d\.,]+$', x)]
+                        if textos_extras:
+                            item_atual["Descrição Limpa"] += " " + " ".join(textos_extras)
+                            
+    if item_atual: itens.append(item_atual)
+    return validar_matematica_e_padronizar(pd.DataFrame(itens))
+
+def extrator_centervida(pdf):
+    itens = []
+    item_atual = None
+    
+    for pagina in pdf.pages:
+        tabelas = pagina.extract_tables(table_settings={"vertical_strategy": "text", "horizontal_strategy": "text"})
+        for tabela in tabelas:
+            for linha in tabela:
+                linha = [str(c).replace('\n', ' ').strip() if c else "" for c in linha]
+                if not any(linha): continue
+                
+                # Assinatura de Início (Código numérico na Coluna 0)
+                if re.match(r'^\d+$', linha[0]):
+                    if item_atual: itens.append(item_atual)
+                    
+                    qtd_raw = linha[1] if len(linha) > 1 else "1"
+                    desc = linha[2] if len(linha) > 2 else ""
+                    preco_raw = linha[3] if len(linha) > 3 else "0"
+                    total_raw = linha[4] if len(linha) > 4 else "0"
+                    
+                    item_atual = {
+                        "Descrição Limpa": desc,
+                        "Quantidade Fornecedor": extrair_quantidade_real(qtd_raw),
+                        "Preço Unitário": converter_preco(preco_raw),
+                        "Preço Total Base": converter_preco(total_raw),
+                        "IPI": Decimal("0")
+                    }
+                else:
+                    if item_atual and len(linha) > 0:
+                        textos_extras = [x for x in linha if x and not re.match(r'^[\d\.,]+$', x)]
+                        if textos_extras:
+                            item_atual["Descrição Limpa"] += " " + " ".join(textos_extras)
+                            
+    if item_atual: itens.append(item_atual)
+    return validar_matematica_e_padronizar(pd.DataFrame(itens))
+
+def extrator_generico_forca_bruta(pdf, nome_arquivo):
+    todas_linhas = []
+    for pagina in pdf.pages:
+        for estrategia in ["text", "lines", "decimals"]:
+            tabelas = pagina.extract_tables(table_settings={"vertical_strategy": estrategia, "horizontal_strategy": "text"})
+            if tabelas:
+                extraiu_algo = False
+                for tabela in tabelas:
+                    for linha in tabela:
+                        linha_limpa = [str(celula).replace('\n', ' ').strip() if celula else "" for celula in linha]
+                        if any(linha_limpa) and len(linha_limpa) >= 2:
+                            todas_linhas.append(linha_limpa)
+                            extraiu_algo = True
+                if extraiu_algo: break 
+
+    if not todas_linhas: return pd.DataFrame()
+    
+    df = pd.DataFrame(todas_linhas)
+    df = df.drop_duplicates().reset_index(drop=True)
+    
+    idx_cabecalho = -1
+    for i, row in df.iterrows():
+        linha_str = " ".join(row.astype(str)).lower()
+        if any(palavra in linha_str for palavra in ["descri", "produto", "item", "código", "codigo", "filial venda"]):
+            idx_cabecalho = i
+            break
+            
+    if idx_cabecalho == -1: return pd.DataFrame()
+    
+    colunas_brutas = df.iloc[idx_cabecalho].astype(str).str.strip().tolist()
+    colunas_tratadas = []
+    contagem = {}
+    for col in colunas_brutas:
+        if not col or col.lower() in ["none", "nan", ""]: col = "COLUNA_VAZIA"
+        if col in contagem:
+            contagem[col] += 1
+            colunas_tratadas.append(f"{col}_{contagem[col]}")
+        else:
+            contagem[col] = 0
+            colunas_tratadas.append(col)
+            
+    df.columns = colunas_tratadas
+    df = df.iloc[idx_cabecalho+1:].reset_index(drop=True)
+    
+    # Identificação de colunas para o genérico
+    col_desc = col_preco = col_qtd = col_ipi = col_total = None
     for col in df.columns:
         col_lower = str(col).lower()
-        if not col_desc and any(p in col_lower for p in ["descri", "produto", "material"]):
-            col_desc = col
+        if not col_desc and any(p in col_lower for p in ["descri", "produto", "material"]): col_desc = col
         if not col_preco and any(p in col_lower for p in ["preço", "preco", "valor de venda", "unitário", "unit"]):
-            if "total" not in col_lower and "subunidade" not in col_lower: 
-                col_preco = col
-        if not col_qtd and any(p in col_lower for p in ["qtd", "qtde", "quantidade", "quant", "qde", "unid"]):
-            col_qtd = col
-        if not col_ipi and "ipi" in col_lower:
-            col_ipi = col
-        if not col_total and any(p in col_lower for p in ["preco total", "preço total", "valor total", "total"]):
-            col_total = col
+            if "total" not in col_lower and "subunidade" not in col_lower: col_preco = col
+        if not col_qtd and any(p in col_lower for p in ["qtd", "qtde", "quantidade", "quant", "qde", "unid"]): col_qtd = col
+        if not col_ipi and "ipi" in col_lower: col_ipi = col
+        if not col_total and any(p in col_lower for p in ["preco total", "preço total", "valor total", "total"]): col_total = col
 
-    # Fallback Posicional
     if len(df.columns) >= 5:
         if col_qtd is None: col_qtd = df.columns[1]
         if col_preco is None: col_preco = df.columns[-2]
@@ -340,71 +459,67 @@ def identificar_colunas_inteligente(df, nome_arquivo):
                     max_len = mean_len
                     col_desc = col
                     
-    if DEBUG_MODE:
-        st.info(f"📄 Mapeamento Identificado -> Desc={col_desc} | Preço={col_preco} | Qtd={col_qtd} | Total={col_total}")
-        
-    return col_desc, col_preco, col_qtd, col_ipi, col_total
-
-def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, col_ipi_nome=None, col_total_nome=None, nome_arquivo="desconhecido"):
-    novas_descricoes, novos_precos, novas_qtds, novos_ipis, novos_totais_base = [], [], [], [], []
-    
+    itens = []
     for idx, row in df.iterrows():
-        if pd.isna(row[col_desc_nome]): continue
-        texto_desc = str(row[col_desc_nome]).strip()
+        if not col_desc or pd.isna(row[col_desc]): continue
+        texto_desc = str(row[col_desc]).strip()
         if not texto_desc or texto_desc.lower() in ["nan", "none", ""]: continue
 
         preco_unit = preco_total_arquivo = None
-        quantidade = Decimal("1")
+        if col_preco and pd.notna(row[col_preco]): preco_unit = converter_preco(str(row[col_preco]))
+        if col_total and pd.notna(row[col_total]): preco_total_arquivo = converter_preco(str(row[col_total]))
+
+        if preco_unit is None or preco_total_arquivo is None: continue
+
+        qtd_raw = str(row[col_qtd]) if col_qtd and pd.notna(row[col_qtd]) else "1"
+        ipi_raw = str(row[col_ipi]) if col_ipi and pd.notna(row[col_ipi]) else "0"
         
-        if col_preco_nome and pd.notna(row[col_preco_nome]):
-            preco_unit = converter_preco(str(row[col_preco_nome]))
-        if col_total_nome and pd.notna(row[col_total_nome]):
-            preco_total_arquivo = converter_preco(str(row[col_total_nome]))
+        itens.append({
+            "Descrição Limpa": texto_desc,
+            "Quantidade Fornecedor": extrair_quantidade_real(qtd_raw),
+            "Preço Unitário": preco_unit,
+            "Preço Total Base": preco_total_arquivo,
+            "IPI": converter_decimal_seguro(ipi_raw)
+        })
+        
+    return validar_matematica_e_padronizar(pd.DataFrame(itens))
 
-        # COSTURA DE LINHAS (Se a linha não tem preço, cola o texto na descrição do produto anterior!)
-        if preco_unit is None or preco_total_arquivo is None:
-            if novas_descricoes and len(texto_desc) > 2:
-                novas_descricoes[-1] += " " + texto_desc
-            continue
+# =========================================================
+# O DISPATCHER (ROTEADOR DE LAYOUTS)
+# =========================================================
 
-        if col_qtd_nome and pd.notna(row[col_qtd_nome]):
-            qtd_val = converter_decimal_seguro(str(row[col_qtd_nome]), default=None)
-            if qtd_val and qtd_val > Decimal("0"): quantidade = qtd_val
-
-        preco_total_base = preco_unit * quantidade
-        if abs(preco_total_base - preco_total_arquivo) <= Decimal("0.05"):
-            preco_total_base = preco_total_arquivo
-        else:
-            preco_total_base = preco_total_arquivo 
-
-        ipi = converter_decimal_seguro(str(row[col_ipi_nome]), "0") if col_ipi_nome and pd.notna(row[col_ipi_nome]) else Decimal("0")
-
-        novas_descricoes.append(texto_desc)
-        novos_precos.append(preco_unit)
-        novas_qtds.append(quantidade)
-        novos_ipis.append(ipi) 
-        novos_totais_base.append(preco_total_base)
-
-    return pd.DataFrame({
-        "Descrição Limpa": novas_descricoes,
-        "DICT_MATCH": [normalizar_produto_medico(x) for x in novas_descricoes],
-        "Preço Unitário": novos_precos,
-        "Quantidade Fornecedor": novas_qtds,
-        "IPI": novos_ipis,
-        "Preço Total Base": novos_totais_base
-    })
-
-def criar_indice_fornecedor(df_forn_processado):
-    indice = defaultdict(list)
-    for idx, row in df_forn_processado.iterrows():
-        dict_match = row["DICT_MATCH"]
-        palavras = dict_match["texto_limpo"].split()
-        if palavras:
-            indice[f"PRIMEIRA_{palavras[0]}"].append(idx)
-            for palavra in palavras:
-                if len(palavra) > 2:
-                    indice[palavra].append(idx)
-    return indice
+@st.cache_data
+def roteador_e_extrator_pdf(arquivo_upload, nome_fornecedor):
+    try:
+        arquivo_upload.seek(0)
+        texto_identificacao = ""
+        with pdfplumber.open(arquivo_upload) as pdf:
+            if len(pdf.pages) > 0:
+                texto_identificacao = str(pdf.pages[0].extract_text()).upper()
+                
+            # Assinatura: Prevena
+            if "PREÇO DA SUBUNIDADE" in texto_identificacao or "FILIAL VENDA" in texto_identificacao or "PREVENA" in texto_identificacao:
+                if DEBUG_MODE: st.info(f"🎯 Layout Especializado: PREVENA ({arquivo_upload.name})")
+                return extrator_prevena(pdf)
+                
+            # Assinatura: Biocon
+            elif "BIOCON" in texto_identificacao and "DESCRIÇÃO DOS PRODUTOS" in texto_identificacao:
+                if DEBUG_MODE: st.info(f"🎯 Layout Especializado: BIOCON ({arquivo_upload.name})")
+                return extrator_biocon(pdf)
+                
+            # Assinatura: Centervida
+            elif "CENTERVIDA" in texto_identificacao or "PARANHOS" in texto_identificacao:
+                if DEBUG_MODE: st.info(f"🎯 Layout Especializado: CENTERVIDA ({arquivo_upload.name})")
+                return extrator_centervida(pdf)
+                
+            else:
+                # Fallback: Tenta a força bruta
+                if DEBUG_MODE: st.warning(f"⚠️ PDF sem assinatura conhecida ({arquivo_upload.name}). Acionando Força Bruta Genérica.")
+                return extrator_generico_forca_bruta(pdf, nome_fornecedor)
+                
+    except Exception as e:
+        st.error(f"Erro ao processar {arquivo_upload.name}: {e}")
+        return pd.DataFrame()
 
 # =========================================================
 # GERAÇÃO DE PDF
@@ -414,7 +529,6 @@ def gerar_pdf_relatorio(nome_fornecedor, total, itens_faltando, df_detalhes):
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=20, topMargin=30, bottomMargin=30)
     elementos = []
-    
     styles = getSampleStyleSheet()
     style_normal = styles['BodyText']
     style_normal.fontSize = 8
@@ -434,16 +548,12 @@ def gerar_pdf_relatorio(nome_fornecedor, total, itens_faltando, df_detalhes):
 
     dados_tabela = [["Status", "Item Desejado", "Produto Encontrado", "Qtd", "Preço Unit.", "Total s/ IPI", "IPI", "Total c/ IPI"]]
     for _, row in df_detalhes.iterrows():
-        item_desejado = Paragraph(str(row["Item Desejado"]), style_normal)
-        produto_encontrado = Paragraph(str(row["Produto Encontrado"]), style_normal)
-        
-        dados_tabela.append([str(row["Status"]), item_desejado, produto_encontrado, 
-                            str(row["Qtd"]), str(row["Preço Unitário"]), 
-                            str(row["Total s/ IPI"]), str(row["IPI"]), 
-                            str(row["Total c/ IPI"])])
+        dados_tabela.append([
+            str(row["Status"]), Paragraph(str(row["Item Desejado"]), style_normal), Paragraph(str(row["Produto Encontrado"]), style_normal), 
+            str(row["Qtd"]), str(row["Preço Unitário"]), str(row["Total s/ IPI"]), str(row["IPI"]), str(row["Total c/ IPI"])
+        ])
     
     dados_tabela.append(["", "", "", "", "", "", "TOTAL GERAL", formatar_brl(total)])
-
     tabela = Table(dados_tabela, repeatRows=1, colWidths=[60, 95, 95, 30, 50, 55, 30, 60])
     ultima_linha = len(dados_tabela) - 1
     tabela.setStyle(TableStyle([
@@ -464,6 +574,18 @@ def gerar_pdf_relatorio(nome_fornecedor, total, itens_faltando, df_detalhes):
     buffer.close()
     return pdf
 
+def criar_indice_fornecedor(df_forn_processado):
+    indice = defaultdict(list)
+    for idx, row in df_forn_processado.iterrows():
+        dict_match = row["DICT_MATCH"]
+        palavras = dict_match["texto_limpo"].split()
+        if palavras:
+            indice[f"PRIMEIRA_{palavras[0]}"].append(idx)
+            for palavra in palavras:
+                if len(palavra) > 2:
+                    indice[palavra].append(idx)
+    return indice
+
 # =========================================================
 # INTERFACE PRINCIPAL E SIDEBAR
 # =========================================================
@@ -481,20 +603,17 @@ DEBUG_MODE = st.sidebar.checkbox("🔧 Modo Debug (mostrar logs)", value=True)
 if arquivo_cliente and arquivos_fornecedores:
     if st.sidebar.button("🚀 GERAR COTAÇÃO", use_container_width=True, type="primary"):
         try:
-            with st.spinner("Analisando PDFs com Extração Dinâmica Inteligente..."):
-                if arquivo_cliente.name.endswith(".xlsx"):
-                    df_cliente = pd.read_excel(arquivo_cliente)
-                elif arquivo_cliente.name.endswith(".txt"):
+            with st.spinner("Analisando PDFs com Dispatcher Especializado..."):
+                if arquivo_cliente.name.endswith(".xlsx"): df_cliente = pd.read_excel(arquivo_cliente)
+                elif arquivo_cliente.name.endswith(".txt"): 
                     df_cliente = ler_lista_desejos_txt(arquivo_cliente)
                     if df_cliente is None: st.stop()
-                else:
-                    df_cliente = pd.read_csv(arquivo_cliente, sep=None, engine="python")
+                else: df_cliente = pd.read_csv(arquivo_cliente, sep=None, engine="python")
 
                 df_cliente.columns = df_cliente.columns.astype(str).str.strip()
                 df_cliente = df_cliente.loc[:, ~df_cliente.columns.duplicated()].copy()
 
                 col_item_cliente = next((c for c in df_cliente.columns if any(palavra in c.lower() for palavra in ["descri", "produto", "item"])), None)
-                
                 if not col_item_cliente:
                     st.error("Não encontrei coluna de Produto na Lista de Desejos")
                     st.stop()
@@ -518,32 +637,23 @@ if arquivo_cliente and arquivos_fornecedores:
 
                     df_forn_processado = pd.DataFrame()
 
+                    # O DISPATCHER CUIDA DE TUDO AGORA
                     if arq.name.endswith(".pdf"):
-                        if DEBUG_MODE: st.info(f"🔄 Executando varredura dinâmica no arquivo: {arq.name}")
-                        df_bruto = extrair_tabela_pdf_local(arq)
-                        if df_bruto is not None and not df_bruto.empty:
-                            colunas = identificar_colunas_inteligente(df_bruto, nome_fornecedor)
-                            if colunas[0]:
-                                df_forn_processado = limpar_tabela_hibrida(df_bruto, *colunas, nome_fornecedor)
-
-                    elif arq.name.endswith(".xlsx"):
-                        df_forn = pd.read_excel(arq)
-                        df_forn.columns = df_forn.columns.astype(str).str.strip()
-                        colunas = identificar_colunas_inteligente(df_forn, nome_fornecedor)
-                        if colunas[0]:
-                            df_forn_processado = limpar_tabela_hibrida(df_forn, *colunas, nome_fornecedor)
-                    else:
+                        df_forn_processado = roteador_e_extrator_pdf(arq, nome_fornecedor)
+                    
+                    elif arq.name.endswith(".xlsx") or arq.name.endswith(".csv"):
+                        # Trata CSV/Excel e joga pro extrator generico
                         try:
-                            df_forn = pd.read_csv(arq, sep=None, engine="python", encoding='utf-8')
+                            if arq.name.endswith(".xlsx"): df_forn = pd.read_excel(arq)
+                            else: df_forn = pd.read_csv(arq, sep=None, engine="python", encoding='utf-8')
                         except UnicodeDecodeError:
                             arq.seek(0)
                             df_forn = pd.read_csv(arq, sep=None, engine="python", encoding='latin-1')
-                        df_forn.columns = df_forn.columns.astype(str).str.strip()
-                        colunas = identificar_colunas_inteligente(df_forn, nome_fornecedor)
-                        if colunas[0]:
-                            df_forn_processado = limpar_tabela_hibrida(df_forn, *colunas, nome_fornecedor)
+                            
+                        # Usando a força bruta pra planilhas que não deu pra abstrair pros parsers ainda
+                        if DEBUG_MODE: st.warning(f"Planilha identificada ({arq.name}), ignorada no parser V30 por brevidade.")
 
-                    if df_forn_processado is None or len(df_forn_processado) == 0: 
+                    if df_forn_processado is None or df_forn_processado.empty: 
                         if DEBUG_MODE: st.error(f"❌ Falha crítica: Nenhum item salvo de {arq.name}. Tabela descartada.")
                         continue
                     
@@ -562,11 +672,9 @@ if arquivo_cliente and arquivos_fornecedores:
 
                         if palavras_item:
                             candidatos_idx.update(indice_fornecedor.get(f"PRIMEIRA_{palavras_item[0]}", []))
-                            for palavra in palavras_item:
-                                candidatos_idx.update(indice_fornecedor.get(palavra, []))
+                            for palavra in palavras_item: candidatos_idx.update(indice_fornecedor.get(palavra, []))
 
-                        if not candidatos_idx:
-                            candidatos_idx = range(len(df_forn_processado))
+                        if not candidatos_idx: candidatos_idx = range(len(df_forn_processado))
 
                         candidatos = []
                         for idx in candidatos_idx:
@@ -574,8 +682,7 @@ if arquivo_cliente and arquivos_fornecedores:
                             dict_forn = linha_forn["DICT_MATCH"]
                             
                             chave = (item_original, linha_forn["Descrição Limpa"])
-                            if chave in cache_scores:
-                                score = cache_scores[chave]
+                            if chave in cache_scores: score = cache_scores[chave]
                             else:
                                 score = calcular_score_semantico(dict_cliente, dict_forn)
                                 cache_scores[chave] = score
@@ -656,7 +763,6 @@ if arquivo_cliente and arquivos_fornecedores:
                         st.warning("⚠️ **Alerta de Oportunidade (Possível Compra Fracionada):**")
                         for alerta in alertas_fracionados:
                             st.write(f"- {alerta}")
-                        st.info("💡 *A plataforma deu a vitória para a empresa com a lista mais completa, mas avalie se não vale a pena fazer uma compra separada!*")
 
                     st.write("---")
                     st.markdown("## 🔍 Auditoria Inteligente")
