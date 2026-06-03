@@ -1,5 +1,5 @@
 # =========================================================
-# V29.2 - ENGINE SEMÂNTICA: ROTEAMENTO PREVENA, BIOCON E CENTERVIDA
+# V29.3 - ENGINE SEMÂNTICA: FORÇA BRUTA SUPERCHARGED E COSTURA DE LINHAS
 # =========================================================
 
 import streamlit as st
@@ -25,7 +25,7 @@ from datetime import datetime
 # =========================================================
 
 st.set_page_config(page_title="PoupaMed", layout="wide", page_icon="🩺")
-st.success("✨ ENGINE V29.2 - ROTEADORES: PREVENA, BIOCON E CENTERVIDA ✨")
+st.success("✨ ENGINE V29.3 - FORÇA BRUTA DINÂMICA E COSTURA DE LINHAS ✨")
 
 DEBUG_MODE = True
 SCORE_MINIMO = 70 
@@ -87,7 +87,6 @@ def ler_lista_desejos_txt(arquivo_txt):
         
         linhas = texto.splitlines()
         dados = []
-        
         for linha in linhas:
             linha = linha.strip()
             if not linha or linha.startswith('#') or linha.startswith('//'): continue
@@ -252,144 +251,10 @@ def calcular_score_semantico(dict_cliente, dict_forn):
         
     text_fuzz = fuzz.token_set_ratio(dict_cliente["texto_limpo"], dict_forn["texto_limpo"])
     score += (text_fuzz * 0.2)
-    
     return score
 
 # =========================================================
-# PARSERS ESPECÍFICOS E ROTEAMENTO DE PDF
-# =========================================================
-
-def parse_pdf_prevena(pdf):
-    todas_linhas = []
-    for pagina in pdf.pages:
-        tabelas = pagina.extract_tables(table_settings={"vertical_strategy": "text", "horizontal_strategy": "text"})
-        if tabelas:
-            for tabela in tabelas:
-                for linha in tabela:
-                    linha_limpa = [str(c).replace('\n', ' ').strip() if c else "" for c in linha]
-                    if any(linha_limpa): todas_linhas.append(linha_limpa)
-                    
-    df = pd.DataFrame(todas_linhas)
-    # Índices CORRIGIDOS para lidar com a fusão de colunas do PDFPlumber
-    col_desc, col_qtd, col_preco, col_total = 2, 4, 5, 7 
-    return df, col_desc, col_preco, col_qtd, None, col_total
-
-def parse_pdf_biocon(pdf):
-    todas_linhas = []
-    for pagina in pdf.pages:
-        tabelas = pagina.extract_tables(table_settings={"vertical_strategy": "text", "horizontal_strategy": "text"})
-        if tabelas:
-            for tabela in tabelas:
-                linha_atual = []
-                for linha in tabela:
-                    linha_limpa = [str(c).replace('\n', ' ').strip() if c else "" for c in linha]
-                    if not any(linha_limpa): continue
-                    
-                    if re.match(r'^\d+$', linha_limpa[0]): 
-                        if linha_atual: todas_linhas.append(linha_atual)
-                        linha_atual = linha_limpa
-                    else:
-                        if linha_atual and len(linha_limpa) > 4:
-                            linha_atual[4] += " " + linha_limpa[4] 
-                if linha_atual: todas_linhas.append(linha_atual)
-                
-    df = pd.DataFrame(todas_linhas)
-    col_desc, col_qtd, col_preco, col_total = 4, 1, 5, 6
-    return df, col_desc, col_preco, col_qtd, None, col_total
-
-def parse_pdf_centervida(pdf):
-    todas_linhas = []
-    for pagina in pdf.pages:
-        tabelas = pagina.extract_tables(table_settings={"vertical_strategy": "text", "horizontal_strategy": "text"})
-        if tabelas:
-            for tabela in tabelas:
-                linha_atual = []
-                for linha in tabela:
-                    linha_limpa = [str(c).replace('\n', ' ').strip() if c else "" for c in linha]
-                    if not any(linha_limpa): continue
-                    
-                    # Centervida quebra descrições, mas sempre começa com o Item (0001, 0002)
-                    if re.match(r'^\d+$', linha_limpa[0]): 
-                        if linha_atual: todas_linhas.append(linha_atual)
-                        linha_atual = linha_limpa
-                    else:
-                        # Puxa o texto da linha extra para a descrição (coluna 4)
-                        if linha_atual and len(linha_limpa) > 4:
-                            linha_atual[4] += " " + linha_limpa[4] 
-                if linha_atual: todas_linhas.append(linha_atual)
-                
-    df = pd.DataFrame(todas_linhas)
-    # Índices com base no layout: Qtd=1, Desc=4, Unit=5, Total=6, IPI=7
-    col_desc, col_qtd, col_preco, col_total, col_ipi = 4, 1, 5, 6, 7
-    return df, col_desc, col_preco, col_qtd, col_ipi, col_total
-
-@st.cache_data
-def roteador_e_extrator_pdf(arquivo_upload):
-    try:
-        arquivo_upload.seek(0)
-        texto_identificacao = ""
-        with pdfplumber.open(arquivo_upload) as pdf:
-            if len(pdf.pages) > 0:
-                texto_identificacao = str(pdf.pages[0].extract_text()).upper()
-                
-            if "VIVEO" in texto_identificacao or "PREVENA" in texto_identificacao or "SUBUNIDADE" in texto_identificacao:
-                if DEBUG_MODE: st.info(f"🔄 Layout Detectado: PREVENA ({arquivo_upload.name})")
-                return parse_pdf_prevena(pdf)
-                
-            elif "BIOCON" in texto_identificacao:
-                if DEBUG_MODE: st.info(f"🔄 Layout Detectado: BIOCON ({arquivo_upload.name})")
-                return parse_pdf_biocon(pdf)
-                
-            elif "CENTERVIDA" in texto_identificacao or "PARANHOS" in texto_identificacao:
-                if DEBUG_MODE: st.info(f"🔄 Layout Detectado: CENTERVIDA ({arquivo_upload.name})")
-                return parse_pdf_centervida(pdf)
-                
-            else:
-                if DEBUG_MODE: st.info(f"🔄 Layout Desconhecido ({arquivo_upload.name}): Acionando fallback real...")
-                return None, None, None, None, None, None 
-    except Exception as e:
-        return None, None, None, None, None, None
-
-def limpar_tabela_padronizada(df, col_desc, col_preco, col_qtd, col_ipi, col_total):
-    novas_descricoes, novos_precos, novas_qtds, novos_ipis, novos_totais_base = [], [], [], [], []
-    for idx, row in df.iterrows():
-        try:
-            if col_desc >= len(row): continue
-            texto_desc = str(row[col_desc]).strip()
-            if not texto_desc or texto_desc.lower() in ["nan", "none", ""]: continue
-
-            quantidade = converter_decimal_seguro(row[col_qtd], "1") if col_qtd is not None and col_qtd < len(row) else Decimal("1")
-            preco_unit = converter_decimal_seguro(row[col_preco], None) if col_preco is not None and col_preco < len(row) else None
-            preco_total_arquivo = converter_decimal_seguro(row[col_total], None) if col_total is not None and col_total < len(row) else None
-            ipi = converter_decimal_seguro(row[col_ipi], "0") if col_ipi is not None and col_ipi < len(row) else Decimal("0")
-
-            if preco_unit is None or preco_total_arquivo is None: continue
-
-            preco_total_base = preco_unit * quantidade
-            if abs(preco_total_base - preco_total_arquivo) <= Decimal("0.05"):
-                preco_total_base = preco_total_arquivo 
-            else:
-                preco_total_base = preco_unit * quantidade 
-
-            novas_descricoes.append(texto_desc)
-            novos_precos.append(preco_unit)
-            novas_qtds.append(quantidade)
-            novos_ipis.append(ipi) 
-            novos_totais_base.append(preco_total_base)
-        except Exception:
-            continue
-
-    return pd.DataFrame({
-        "Descrição Limpa": novas_descricoes,
-        "DICT_MATCH": [normalizar_produto_medico(x) for x in novas_descricoes],
-        "Preço Unitário": novos_precos,
-        "Quantidade Fornecedor": novas_qtds,
-        "IPI": novos_ipis,
-        "Preço Total Base": novos_totais_base
-    })
-
-# =========================================================
-# FALLBACK PLANILHAS E PDFS DESCONHECIDOS (FORÇA BRUTA)
+# FORÇA BRUTA SUPERCHARGED (SUBSTITUI OS PARSERS FIXOS)
 # =========================================================
 
 @st.cache_data
@@ -405,12 +270,14 @@ def extrair_tabela_pdf_local(arquivo_upload):
                         "horizontal_strategy": "text"
                     })
                     if tabelas:
+                        extraiu_algo = False
                         for tabela in tabelas:
                             for linha in tabela:
                                 linha_limpa = [str(celula).replace('\n', ' ').strip() if celula else "" for celula in linha]
                                 if any(linha_limpa) and len(linha_limpa) >= 2:
                                     todas_linhas.append(linha_limpa)
-                        break
+                                    extraiu_algo = True
+                        if extraiu_algo: break # Se achou colunas validas, ignora o resto das estrategias pra essa pagina
 
         if not todas_linhas: return None
         
@@ -420,7 +287,7 @@ def extrair_tabela_pdf_local(arquivo_upload):
         idx_cabecalho = -1
         for i, row in df.iterrows():
             linha_str = " ".join(row.astype(str)).lower()
-            if any(palavra in linha_str for palavra in ["descri", "produto", "item", "código", "codigo"]):
+            if any(palavra in linha_str for palavra in ["descri", "produto", "item", "código", "codigo", "filial venda"]):
                 idx_cabecalho = i
                 break
         
@@ -445,19 +312,22 @@ def extrair_tabela_pdf_local(arquivo_upload):
 
 def identificar_colunas_inteligente(df, nome_arquivo):
     col_desc = col_preco = col_qtd = col_ipi = col_total = None
-    for i, col in enumerate(df.columns):
+    
+    for col in df.columns:
         col_lower = str(col).lower()
-        if any(p in col_lower for p in ["descri", "produto", "item", "material"]):
+        if not col_desc and any(p in col_lower for p in ["descri", "produto", "material"]):
             col_desc = col
-        if not col_preco and any(p in col_lower for p in ["preço", "preco", "valor", "unit"]):
-            if "total" not in col_lower: col_preco = col
-        if not col_qtd and any(p in col_lower for p in ["qtd", "qtde", "quantidade", "quant", "qde", "tidade", "unid"]):
+        if not col_preco and any(p in col_lower for p in ["preço", "preco", "valor de venda", "unitário", "unit"]):
+            if "total" not in col_lower and "subunidade" not in col_lower: 
+                col_preco = col
+        if not col_qtd and any(p in col_lower for p in ["qtd", "qtde", "quantidade", "quant", "qde", "unid"]):
             col_qtd = col
-        if "ipi" in col_lower:
+        if not col_ipi and "ipi" in col_lower:
             col_ipi = col
         if not col_total and any(p in col_lower for p in ["preco total", "preço total", "valor total", "total"]):
             col_total = col
 
+    # Fallback Posicional
     if len(df.columns) >= 5:
         if col_qtd is None: col_qtd = df.columns[1]
         if col_preco is None: col_preco = df.columns[-2]
@@ -469,26 +339,37 @@ def identificar_colunas_inteligente(df, nome_arquivo):
                 if mean_len > max_len:
                     max_len = mean_len
                     col_desc = col
+                    
+    if DEBUG_MODE:
+        st.info(f"📄 Mapeamento Identificado -> Desc={col_desc} | Preço={col_preco} | Qtd={col_qtd} | Total={col_total}")
+        
     return col_desc, col_preco, col_qtd, col_ipi, col_total
 
 def limpar_tabela_hibrida(df, col_desc_nome, col_preco_nome, col_qtd_nome=None, col_ipi_nome=None, col_total_nome=None, nome_arquivo="desconhecido"):
     novas_descricoes, novos_precos, novas_qtds, novos_ipis, novos_totais_base = [], [], [], [], []
+    
     for idx, row in df.iterrows():
+        if pd.isna(row[col_desc_nome]): continue
         texto_desc = str(row[col_desc_nome]).strip()
         if not texto_desc or texto_desc.lower() in ["nan", "none", ""]: continue
 
         preco_unit = preco_total_arquivo = None
         quantidade = Decimal("1")
         
-        if col_qtd_nome and pd.notna(row[col_qtd_nome]):
-            qtd_val = converter_decimal_seguro(str(row[col_qtd_nome]), default=None)
-            if qtd_val and qtd_val > Decimal("0"): quantidade = qtd_val
         if col_preco_nome and pd.notna(row[col_preco_nome]):
             preco_unit = converter_preco(str(row[col_preco_nome]))
         if col_total_nome and pd.notna(row[col_total_nome]):
             preco_total_arquivo = converter_preco(str(row[col_total_nome]))
 
-        if preco_unit is None or preco_total_arquivo is None: continue
+        # COSTURA DE LINHAS (Se a linha não tem preço, cola o texto na descrição do produto anterior!)
+        if preco_unit is None or preco_total_arquivo is None:
+            if novas_descricoes and len(texto_desc) > 2:
+                novas_descricoes[-1] += " " + texto_desc
+            continue
+
+        if col_qtd_nome and pd.notna(row[col_qtd_nome]):
+            qtd_val = converter_decimal_seguro(str(row[col_qtd_nome]), default=None)
+            if qtd_val and qtd_val > Decimal("0"): quantidade = qtd_val
 
         preco_total_base = preco_unit * quantidade
         if abs(preco_total_base - preco_total_arquivo) <= Decimal("0.05"):
@@ -600,7 +481,7 @@ DEBUG_MODE = st.sidebar.checkbox("🔧 Modo Debug (mostrar logs)", value=True)
 if arquivo_cliente and arquivos_fornecedores:
     if st.sidebar.button("🚀 GERAR COTAÇÃO", use_container_width=True, type="primary"):
         try:
-            with st.spinner("Analisando PDFs e roteando layouts..."):
+            with st.spinner("Analisando PDFs com Extração Dinâmica Inteligente..."):
                 if arquivo_cliente.name.endswith(".xlsx"):
                     df_cliente = pd.read_excel(arquivo_cliente)
                 elif arquivo_cliente.name.endswith(".txt"):
@@ -638,19 +519,12 @@ if arquivo_cliente and arquivos_fornecedores:
                     df_forn_processado = pd.DataFrame()
 
                     if arq.name.endswith(".pdf"):
-                        df_bruto, c_desc, c_preco, c_qtd, c_ipi, c_total = roteador_e_extrator_pdf(arq)
-                        
-                        # NOVO FLUXO: Se o roteador retornar dados, usa o parser específico.
+                        if DEBUG_MODE: st.info(f"🔄 Executando varredura dinâmica no arquivo: {arq.name}")
+                        df_bruto = extrair_tabela_pdf_local(arq)
                         if df_bruto is not None and not df_bruto.empty:
-                            df_forn_processado = limpar_tabela_padronizada(df_bruto, c_desc, c_preco, c_qtd, c_ipi, c_total)
-                        else:
-                            # 🚀 SE O ROTEADOR NÃO ACHOU (OU FALHOU), ACIONA A FORÇA BRUTA AQUI!
-                            if DEBUG_MODE: st.info(f"🔄 Executando extração por força bruta no arquivo: {arq.name}")
-                            df_bruto = extrair_tabela_pdf_local(arq)
-                            if df_bruto is not None and not df_bruto.empty:
-                                colunas = identificar_colunas_inteligente(df_bruto, nome_fornecedor)
-                                if colunas[0]:
-                                    df_forn_processado = limpar_tabela_hibrida(df_bruto, *colunas, nome_fornecedor)
+                            colunas = identificar_colunas_inteligente(df_bruto, nome_fornecedor)
+                            if colunas[0]:
+                                df_forn_processado = limpar_tabela_hibrida(df_bruto, *colunas, nome_fornecedor)
 
                     elif arq.name.endswith(".xlsx"):
                         df_forn = pd.read_excel(arq)
@@ -670,7 +544,7 @@ if arquivo_cliente and arquivos_fornecedores:
                             df_forn_processado = limpar_tabela_hibrida(df_forn, *colunas, nome_fornecedor)
 
                     if df_forn_processado is None or len(df_forn_processado) == 0: 
-                        if DEBUG_MODE: st.warning(f"❌ Nenhum item válido extraído de {arq.name}. Tabela descartada.")
+                        if DEBUG_MODE: st.error(f"❌ Falha crítica: Nenhum item salvo de {arq.name}. Tabela descartada.")
                         continue
                     
                     indice_fornecedor = criar_indice_fornecedor(df_forn_processado)
