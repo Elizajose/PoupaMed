@@ -306,7 +306,7 @@ def roteador_e_extrator_pdf(arquivo_upload):
             if len(pdf.pages) > 0:
                 texto_identificacao = str(pdf.pages[0].extract_text()).upper()
                 
-            if "PREVENA" in texto_identificacao or "VIVEO" in texto_identificacao:
+            if "VIVEO" in texto_identificacao or "PREVENA" in texto_identificacao or "SUBUNIDADE" in texto_identificacao:
                 if DEBUG_MODE: st.info(f"🔄 Layout Detectado: PREVENA ({arquivo_upload.name})")
                 return parse_pdf_prevena(pdf)
                 
